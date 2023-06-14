@@ -9,9 +9,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Wri
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use connection::messages::{
-    ChannelSubscribe, Command, RouterRequestWrapper,
-};
+use connection::messages::{ChannelSubscribe, Command, RouterRequestWrapper};
 
 pub struct ServerHandle {
     command_channel: Sender<Command>,
@@ -110,7 +108,7 @@ pub struct WriteConnection {
 
 impl Connection {
     pub fn new() -> (Connection, ConnectionHandle) {
-        let (tx, rx) = channel(1000);
+        let (tx, rx) = channel(100);
         let connection = Connection {
             command_channel: rx,
             channel_id: Uuid::new_v4(),
