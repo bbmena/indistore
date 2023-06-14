@@ -1,8 +1,9 @@
-use crate::message_bus::LaneCommunicator;
+use crate::message_bus::MessageBusHandle;
 use bytes::BytesMut;
 use rkyv::{Archive, Deserialize, Serialize};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use tachyonix::Sender;
+use tokio::net::TcpStream;
 use tokio::sync::oneshot::Sender as OneShotSender;
 use uuid::Uuid;
 
@@ -57,10 +58,28 @@ pub enum Message {
     DeleteResponse(),
 }
 
+pub enum NodeManagerCommand {
+    Shutdown(),
+    Connect(Connect),
+}
+
 pub enum Command {
     Shutdown(),
-    AddNode(AddNode),
     Subscribe(ChannelSubscribe),
+}
+
+pub enum MessageBusCommand {
+    Shutdown(),
+    AddConnection(AddConnection),
+}
+
+pub struct Connect {
+    pub address: SocketAddr,
+}
+
+pub struct AddConnection {
+    pub address: SocketAddr,
+    pub stream: TcpStream,
 }
 
 pub struct OneShotMessage {
@@ -72,11 +91,6 @@ pub struct OneShotMessage {
 pub struct ChannelSubscribe {
     pub channel_id: Uuid,
     pub response_channel: Sender<BytesMut>,
-}
-
-pub struct AddNode {
-    pub address: IpAddr,
-    pub handle: LaneCommunicator,
 }
 
 pub struct RouterRequestWrapper {

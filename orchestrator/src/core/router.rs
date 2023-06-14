@@ -1,8 +1,8 @@
-use crate::lib::hash_ring::HashRing;
+use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
-use connection::message_bus::LaneCommunicator;
+use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    AddNode, ArchivedMessage, ChannelSubscribe, Command, Message, RouterRequestWrapper,
+    ArchivedMessage, ChannelSubscribe, Command, Message, RouterRequestWrapper,
 };
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
@@ -17,7 +17,7 @@ use uuid::Uuid;
 pub struct Router {
     command_queue: Receiver<Command>,
     hash_ring: Arc<Mutex<HashRing>>,
-    node_map: Arc<DashMap<IpAddr, LaneCommunicator>>,
+    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
 }
@@ -31,7 +31,7 @@ pub struct RequestQueueProcessor {
     hash_ring: Arc<Mutex<HashRing>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
-    node_map: Arc<DashMap<IpAddr, LaneCommunicator>>,
+    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
 }
 
 pub struct ResponseQueueProcessor {
@@ -44,9 +44,9 @@ impl Router {
     pub fn new(
         command_queue_sender: Sender<Command>,
         command_queue_receiver: Receiver<Command>,
+        node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     ) -> (Router, RouterHandle) {
         let hash_ring = Arc::new(Mutex::new(HashRing::new()));
-        let node_map = Arc::new(DashMap::new());
         let channel_map = Arc::new(DashMap::new());
         let message_to_channel_map = Arc::new(DashMap::new());
 
@@ -105,10 +105,10 @@ impl Router {
                             .await;
                         break;
                     }
-                    Command::AddNode(node) => self.add_node(node).await,
                     Command::Subscribe(sub) => {
                         self.add_subscriber(sub);
                     }
+                    _ => {}
                 },
                 Err(_) => break,
             }
@@ -123,12 +123,6 @@ impl Router {
         // TODO graceful shutdown
         request_processor_handle.abort();
         response_processor_handle.abort();
-    }
-
-    async fn add_node(&self, node: AddNode) {
-        self.node_map.insert(node.address, node.handle);
-        let mut hr = self.hash_ring.lock().await;
-        hr.add_node(node.address);
     }
 
     fn add_subscriber(&self, sub: ChannelSubscribe) {
@@ -162,7 +156,7 @@ impl RequestQueueProcessor {
                     {
                         let node_lane = self.node_map.get(&addr).expect("Node not found!");
                         node_lane
-                            .write_to_lane
+                            .send_to_bus
                             .send(buff)
                             .await
                             .expect("Unable to send!");
