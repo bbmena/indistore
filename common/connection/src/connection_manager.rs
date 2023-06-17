@@ -8,7 +8,7 @@ use std::sync::Arc;
 use tachyonix::{channel, Receiver, RecvError, Sender};
 use tokio::net::{TcpListener, TcpStream};
 
-pub struct NodeManager {
+pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
     address: SocketAddr,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
@@ -18,14 +18,14 @@ pub struct NodeManagerHandle {
     command_channel: Sender<NodeManagerCommand>,
 }
 
-impl NodeManager {
+impl ConnectionManager {
     pub fn new(
         address: SocketAddr,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-    ) -> (NodeManager, NodeManagerHandle) {
+    ) -> (ConnectionManager, NodeManagerHandle) {
         let (tx, rx) = channel(100);
 
-        let node_listener = NodeManager {
+        let node_listener = ConnectionManager {
             command_channel: rx,
             address,
             node_map,
@@ -37,30 +37,31 @@ impl NodeManager {
         (node_listener, node_listener_handle)
     }
 
-    pub async fn start(mut self) {
+    pub async fn start(mut self, output_channel: Sender<BytesMut>) {
         let data_listener = TcpListener::bind(self.address).await.unwrap();
+        let node_map = self.node_map.clone();
+        let output_clone = output_channel.clone();
         let listener = tokio::spawn(async move {
             loop {
                 match data_listener.accept().await {
                     Ok((stream, address)) => {
-                        if !self.node_map.contains_key(&address.ip()) {
+                        if !node_map.contains_key(&address.ip()) {
                             let (send_to_bus, input_channel) = channel::<BytesMut>(1000);
-                            let (output_channel, receive_from_bus) = channel::<BytesMut>(1000);
 
-                            let (message_bus, handle) =
-                                MessageBus::new(receive_from_bus, send_to_bus);
+                            let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                            self.node_map.insert(address.ip(), handle);
+                            node_map.insert(address.ip(), handle);
+                            let out = output_clone.clone();
                             tokio::spawn(async move {
-                                start_new_bus(message_bus, input_channel, output_channel).await;
+                                start_new_bus(message_bus, input_channel, out.clone()).await;
                             });
                         }
 
-                        let handle = self.node_map.get(&connect.address.ip()).expect("Not found!");
+                        let handle = node_map.get(&address.ip()).expect("Not found!");
                         handle
                             .command_channel
                             .send(MessageBusCommand::AddConnection(AddConnection {
-                                address: connect.address,
+                                address,
                                 stream,
                             }));
                     }
@@ -68,7 +69,7 @@ impl NodeManager {
                 }
             }
         });
-
+        let out_put_clone = output_channel.clone();
         loop {
             match self.command_channel.recv().await {
                 Ok(command) => {
@@ -82,21 +83,22 @@ impl NodeManager {
                             let stream = TcpStream::connect(connect.address)
                                 .await
                                 .expect("Unable to connect!");
-
                             if !self.node_map.contains_key(&connect.address.ip()) {
                                 let (send_to_bus, input_channel) = channel::<BytesMut>(1000);
-                                let (output_channel, receive_from_bus) = channel::<BytesMut>(1000);
 
-                                let (message_bus, handle) =
-                                    MessageBus::new(receive_from_bus, send_to_bus);
+                                let (message_bus, handle) = MessageBus::new(send_to_bus);
 
                                 self.node_map.insert(connect.address.ip(), handle);
+                                let out = out_put_clone.clone();
                                 tokio::spawn(async move {
-                                    start_new_bus(message_bus, input_channel, output_channel).await;
+                                    start_new_bus(message_bus, input_channel, out.clone()).await;
                                 });
                             }
 
-                            let handle = self.node_map.get(&connect.address.ip()).expect("Not found!");
+                            let handle = self
+                                .node_map
+                                .get(&connect.address.ip())
+                                .expect("Not found!");
                             handle
                                 .command_channel
                                 .send(MessageBusCommand::AddConnection(AddConnection {
@@ -112,15 +114,15 @@ impl NodeManager {
     }
 }
 
-async fn start_new_bus(message_bus: MessageBus, input_channel: Receiver<BytesMut>, output_channel: Sender<BytesMut>) {
+async fn start_new_bus(
+    message_bus: MessageBus,
+    input_channel: Receiver<BytesMut>,
+    output_channel: Sender<BytesMut>,
+) {
     let work_queue = Worker::new_fifo();
     let stealer = work_queue.stealer();
 
-    message_bus.start(
-        input_channel,
-        output_channel,
-        work_queue,
-        stealer,
-    ).await;
+    message_bus
+        .start(input_channel, output_channel, work_queue, stealer)
+        .await;
 }
-
