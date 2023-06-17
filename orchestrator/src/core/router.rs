@@ -108,7 +108,6 @@ impl Router {
                     Command::Subscribe(sub) => {
                         self.add_subscriber(sub);
                     }
-                    _ => {}
                 },
                 Err(_) => break,
             }
@@ -147,24 +146,30 @@ impl RequestQueueProcessor {
             match routing_info {
                 Some(routing_info) => {
                     let request_id = routing_info.1.clone();
-                    let addr = self
+                    match self
                         .hash_ring
                         .lock()
                         .await
                         .find_key_owner(routing_info.0.as_str().into())
-                        .expect("Unable to find address");
                     {
-                        let node_lane = self.node_map.get(&addr).expect("Node not found!");
-                        node_lane
-                            .send_to_bus
-                            .send(buff)
-                            .await
-                            .expect("Unable to send!");
+                        None => {
+                            println!("Unable to find address!")
+                        }
+                        Some(addr) => {
+                            {
+                                let node_lane = self.node_map.get(&addr).expect("Node not found!");
+                                node_lane
+                                    .send_to_bus
+                                    .send(buff)
+                                    .await
+                                    .expect("Unable to send!");
+                            }
+                            self.message_to_channel_map.insert(
+                                MessageId::new(request_id),
+                                ChannelId::new(message.channel_id),
+                            );
+                        }
                     }
-                    self.message_to_channel_map.insert(
-                        MessageId::new(request_id),
-                        ChannelId::new(message.channel_id),
-                    );
                 }
                 None => {
                     println!("Invalid message type received")
