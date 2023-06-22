@@ -1,8 +1,9 @@
 use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
+use connection::connection_manager::{ConnectionManager, ConnectionManagerHandle};
 use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    ArchivedMessage, ChannelSubscribe, Command, Message, RouterRequestWrapper,
+    ArchivedMessage, ChannelSubscribe, Command, Message, RouterCommand, RouterRequestWrapper,
 };
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
@@ -15,7 +16,7 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 pub struct Router {
-    command_queue: Receiver<Command>,
+    command_queue: Receiver<RouterCommand>,
     hash_ring: Arc<Mutex<HashRing>>,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
@@ -23,7 +24,7 @@ pub struct Router {
 }
 
 pub struct RouterHandle {
-    command_queue: Sender<Command>,
+    command_queue: Sender<RouterCommand>,
 }
 
 pub struct RequestQueueProcessor {
@@ -42,8 +43,8 @@ pub struct ResponseQueueProcessor {
 
 impl Router {
     pub fn new(
-        command_queue_sender: Sender<Command>,
-        command_queue_receiver: Receiver<Command>,
+        command_queue_sender: Sender<RouterCommand>,
+        command_queue_receiver: Receiver<RouterCommand>,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     ) -> (Router, RouterHandle) {
         let hash_ring = Arc::new(Mutex::new(HashRing::new()));
@@ -67,6 +68,7 @@ impl Router {
         mut self,
         request_queue: Receiver<RouterRequestWrapper>,
         response_queue: Receiver<BytesMut>,
+        mut connection_manager_handle: ConnectionManagerHandle,
     ) {
         let channel_map_ref = self.channel_map.clone();
         let message_to_channel_map_ref = self.message_to_channel_map.clone();
@@ -97,16 +99,35 @@ impl Router {
             response_processor.process().await;
         });
 
+        let hash_ring_ref = self.hash_ring.clone();
+        tokio::spawn(async move {
+            loop {
+                let notification = connection_manager_handle
+                    .notification_receiver
+                    .recv()
+                    .await
+                    .expect("Unable to receive!");
+                hash_ring_ref
+                    .lock()
+                    .await
+                    .add_node(notification.address.ip());
+                println!("Node added to ring");
+            }
+        });
+
         loop {
             match self.command_queue.recv().await {
                 Ok(command) => match command {
-                    Command::Shutdown() => {
+                    RouterCommand::Shutdown() => {
                         self.shutdown(request_processor_handle, response_processor_handle)
                             .await;
                         break;
                     }
-                    Command::Subscribe(sub) => {
+                    RouterCommand::Subscribe(sub) => {
                         self.add_subscriber(sub);
+                    }
+                    RouterCommand::AddNode(address) => {
+                        self.hash_ring.lock().await.add_node(address)
                     }
                 },
                 Err(_) => break,
