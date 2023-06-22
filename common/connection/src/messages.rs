@@ -49,6 +49,13 @@ pub struct PutResponse {
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[archive(compare(PartialEq), check_bytes)]
+pub struct InvalidResponse {
+    pub id: Uuid,
+    pub key: String,
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[archive(compare(PartialEq), check_bytes)]
 pub enum Message {
     Get(GetRequest),
     Put(PutRequest),
@@ -56,6 +63,7 @@ pub enum Message {
     GetResponse(GetResponse),
     PutResponse(PutResponse),
     DeleteResponse(),
+    InvalidResponse(InvalidResponse)
 }
 
 pub enum NodeManagerCommand {
@@ -63,9 +71,14 @@ pub enum NodeManagerCommand {
     Connect(Connect),
 }
 
+pub enum RouterCommand {
+    Shutdown(),
+    AddNode(IpAddr),
+    Subscribe(ChannelSubscribe),
+}
+
 pub enum Command {
     Shutdown(),
-    Subscribe(ChannelSubscribe),
 }
 
 pub enum MessageBusCommand {
@@ -96,4 +109,8 @@ pub struct ChannelSubscribe {
 pub struct RouterRequestWrapper {
     pub channel_id: Uuid,
     pub body: BytesMut,
+}
+
+pub struct ConnectionNotification {
+    pub address: SocketAddr,
 }
