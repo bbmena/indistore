@@ -44,8 +44,18 @@ impl ReadConnection {
     pub async fn read(mut self, output_channel: Sender<BytesMut>) {
         tokio::spawn(async move {
             loop {
-                let buff_size = self.data_read_stream.read_u32().await.expect("");
-                let buff = BytesMut::with_capacity(buff_size as usize);
+                match self.data_read_stream.read_u32().await {
+                    Ok(message_size) => {
+                        let mut buff = BytesMut::with_capacity(message_size as usize);
+                        match self.data_read_stream.read_buf(&mut buff).await {
+                            Ok(_) => {
+                                output_channel.send(buff).await.expect("Unable to send!")
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    Err(_) => {}
+                }
             }
         });
     }
@@ -56,12 +66,18 @@ pub struct WriteConnection {
     command_channel: Receiver<Command>,
 }
 
+// TODO this needs to put the payload into a message
 impl WriteConnection {
     pub async fn write(mut self, input_channel: Stealer<BytesMut>) {
         tokio::spawn(async move {
             loop {
                 match input_channel.steal() {
                     Steal::Success(mut buffer) => {
+                        self.data_write_stream
+                            .write_u32(buffer.len() as u32)
+                            .await
+                            .expect("");
+
                         self.data_write_stream
                             .write_buf(&mut buffer)
                             .await
@@ -99,7 +115,7 @@ pub struct ConnectionLaneHandle {
 }
 
 impl ConnectionLane {
-    pub fn new() -> (ConnectionLane, ConnectionLaneHandle) {
+    pub fn new(port: u16) -> (ConnectionLane, ConnectionLaneHandle) {
         let (tx, rx) = channel(100);
 
         let connection_lane = ConnectionLane {
@@ -174,14 +190,10 @@ pub struct MessageBus {
 pub struct MessageBusHandle {
     pub command_channel: Sender<MessageBusCommand>,
     pub send_to_bus: Sender<BytesMut>,
-    pub receive_from_bus: Receiver<BytesMut>,
 }
 
 impl MessageBus {
-    pub fn new(
-        receive_from_bus: Receiver<BytesMut>,
-        send_to_bus: Sender<BytesMut>,
-    ) -> (MessageBus, MessageBusHandle) {
+    pub fn new(send_to_bus: Sender<BytesMut>) -> (MessageBus, MessageBusHandle) {
         let mut connections = DashMap::new();
         let (tx, rx) = channel::<MessageBusCommand>(100);
         let bus = MessageBus {
@@ -191,7 +203,6 @@ impl MessageBus {
         };
         let handle = MessageBusHandle {
             command_channel: tx,
-            receive_from_bus,
             send_to_bus,
         };
         (bus, handle)
@@ -237,11 +248,11 @@ impl MessageBus {
                         }
                         MessageBusCommand::AddConnection(connection) => {
                             let stealer_clone = stealer.clone();
-                            let (lane, handle) = ConnectionLane::new();
+                            let (lane, handle) = ConnectionLane::new(connection.address.port());
                             self.connections.insert(connection.address, handle);
+                            let sender = lane_sender.clone();
                             tokio::spawn(async move {
-                                lane.start(stealer_clone, lane_sender.clone(), connection.stream)
-                                    .await
+                                lane.start(stealer_clone, sender, connection.stream).await
                             });
                         }
                     }
@@ -267,7 +278,9 @@ impl MessageBusInput {
     pub async fn start(mut self) {
         loop {
             match self.input_channel.recv().await {
-                Ok(message) => self.worker.push(message),
+                Ok(message) => {
+                    self.worker.push(message)
+                }
                 Err(_) => break,
             }
         }
