@@ -1,38 +1,50 @@
 use crate::message_bus::{MessageBus, MessageBusHandle};
-use crate::messages::{AddConnection, MessageBusCommand, NodeManagerCommand};
+use crate::messages::{
+    AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand,
+};
 use bytes::BytesMut;
 use crossbeam_deque::Worker;
 use dashmap::DashMap;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
+use std::{
+    net::{IpAddr, SocketAddr},
+    sync::Arc,
+};
 use tachyonix::{channel, Receiver, RecvError, Sender};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::broadcast,
+};
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
     address: SocketAddr,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    notifier: Sender<ConnectionNotification>,
 }
 
-pub struct NodeManagerHandle {
-    command_channel: Sender<NodeManagerCommand>,
+pub struct ConnectionManagerHandle {
+    pub command_channel: Sender<NodeManagerCommand>,
+    pub notification_receiver: Receiver<ConnectionNotification>,
 }
 
 impl ConnectionManager {
     pub fn new(
         address: SocketAddr,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-    ) -> (ConnectionManager, NodeManagerHandle) {
-        let (tx, rx) = channel(100);
+    ) -> (ConnectionManager, ConnectionManagerHandle) {
+        let (command_sender, command_receiver) = channel(100);
+        let (notifier, notification_receiver) = channel(100);
 
         let node_listener = ConnectionManager {
-            command_channel: rx,
+            command_channel: command_receiver,
             address,
             node_map,
+            notifier,
         };
 
-        let node_listener_handle = NodeManagerHandle {
-            command_channel: tx,
+        let node_listener_handle = ConnectionManagerHandle {
+            command_channel: command_sender,
+            notification_receiver,
         };
         (node_listener, node_listener_handle)
     }
@@ -45,6 +57,7 @@ impl ConnectionManager {
             loop {
                 match data_listener.accept().await {
                     Ok((stream, address)) => {
+                        println!("New connection request from {}", &address);
                         if !node_map.contains_key(&address.ip()) {
                             let (send_to_bus, input_channel) = channel::<BytesMut>(1000);
 
@@ -55,6 +68,10 @@ impl ConnectionManager {
                             tokio::spawn(async move {
                                 start_new_bus(message_bus, input_channel, out.clone()).await;
                             });
+                            self.notifier
+                                .send(ConnectionNotification { address })
+                                .await
+                                .expect("Unable to send!");
                         }
 
                         let handle = node_map.get(&address.ip()).expect("Not found!");
@@ -63,7 +80,9 @@ impl ConnectionManager {
                             .send(MessageBusCommand::AddConnection(AddConnection {
                                 address,
                                 stream,
-                            }));
+                            }))
+                            .await
+                            .expect("TODO: panic message");
                     }
                     Err(_) => break,
                 }
@@ -80,6 +99,7 @@ impl ConnectionManager {
                             break;
                         }
                         NodeManagerCommand::Connect(connect) => {
+                            println!("Attempting to connect to {}", &connect.address);
                             let stream = TcpStream::connect(connect.address)
                                 .await
                                 .expect("Unable to connect!");
@@ -104,7 +124,9 @@ impl ConnectionManager {
                                 .send(MessageBusCommand::AddConnection(AddConnection {
                                     address: connect.address,
                                     stream,
-                                }));
+                                }))
+                                .await
+                                .expect("TODO: panic message");
                         }
                     }
                 }
