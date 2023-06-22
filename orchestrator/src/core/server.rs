@@ -1,3 +1,20 @@
+//!    # Server Operational Flow
+//!    * Upon initiation with `serve()` function, a `TcpListener` is spawned at a given address and begins listening for connections.
+//!
+//!    * When a client connects, the Server creates a `Connection` and `ConnectionHandle`. The Connection
+//!    is given a `Sender` to send requests to the Router as well as a `Sender` to send Commands.
+//!
+//!    * `Connection` sends a `ChannelSubscribe` command to the Router to add itself to the routing table.
+//!
+//!    * The `ChannelSubscribe` command contains a UUID to identify the subscription, and a channel for
+//!    the Router to respond to any requests
+//!
+//!    * `Connection` then spawns a `ReadConnection` and `WriteConnection`.
+//!
+//!    * `ReadConnection` handles incoming requests from the Client and forwards them on to the Router.
+//!
+//!    * `WriteConnection` accepts responses from the Router and send them to the Client.
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -9,7 +26,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Wri
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use connection::messages::{ChannelSubscribe, Command, RouterRequestWrapper};
+use connection::messages::{ChannelSubscribe, Command, RouterCommand, RouterRequestWrapper};
 
 pub struct ServerHandle {
     command_channel: Sender<Command>,
@@ -41,7 +58,7 @@ impl Server {
         (server, server_handle)
     }
 
-    pub async fn serve(mut self, router_command_queue: Sender<Command>) -> io::Result<()> {
+    pub async fn serve(mut self, router_command_queue: Sender<RouterCommand>) -> io::Result<()> {
         let data_listener = TcpListener::bind(self.address).await.unwrap();
         let connections_ref = self.connections.clone();
         let listener = tokio::spawn(async move {
@@ -94,12 +111,14 @@ pub struct Connection {
     channel_id: Uuid,
 }
 
+/** Reads from connected client and relays the request on to the router **/
 pub struct ReadConnection {
     data_read_stream: BufReader<ReadHalf<TcpStream>>,
     command_channel: Receiver<Command>,
     router_channel: Sender<RouterRequestWrapper>,
 }
 
+/** Writes back to the client the response it receives from the router **/
 pub struct WriteConnection {
     data_write_stream: BufWriter<WriteHalf<TcpStream>>,
     command_channel: Receiver<Command>,
@@ -123,17 +142,17 @@ impl Connection {
     pub async fn start(
         mut self,
         stream: TcpStream,
-        router_channel: Sender<RouterRequestWrapper>,
-        router_command_queue: Sender<Command>,
+        send_to_router: Sender<RouterRequestWrapper>,
+        router_command_queue: Sender<RouterCommand>,
     ) {
         let (read, write) = tokio::io::split(stream);
         let (read_half_queue, read_input_queue) = channel::<Command>(100);
         let (write_half_queue, write_input_queue) = channel::<Command>(100);
 
-        let (router_sender, router_receiver) = channel::<BytesMut>(10000);
+        let (router_sender, receive_from_router) = channel::<BytesMut>(1000);
 
         router_command_queue
-            .send(Command::Subscribe(ChannelSubscribe {
+            .send(RouterCommand::Subscribe(ChannelSubscribe {
                 channel_id: self.channel_id,
                 response_channel: router_sender,
             }))
@@ -143,13 +162,13 @@ impl Connection {
         let read_connection = ReadConnection {
             data_read_stream: BufReader::new(read),
             command_channel: read_input_queue,
-            router_channel,
+            router_channel: send_to_router,
         };
 
         let write_connection = WriteConnection {
             data_write_stream: BufWriter::new(write),
             command_channel: write_input_queue,
-            router_channel: router_receiver,
+            router_channel: receive_from_router,
         };
 
         tokio::spawn(async move {
