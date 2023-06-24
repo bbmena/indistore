@@ -1,16 +1,12 @@
 use bytes::BytesMut;
 use crossbeam_deque::{Steal, Stealer, Worker};
 use dashmap::DashMap;
-use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
-use tachyonix::{channel, Receiver, RecvError, Sender};
-use tokio::io::{
-    AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter,
-    ReadHalf, WriteHalf,
-};
+use std::net::SocketAddr;
+use tachyonix::{channel, Receiver, Sender};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
-use crate::messages::{Command, Message, MessageBusCommand};
+use crate::messages::{Command, MessageBusCommand};
 
 /**
    UNINITIATED - Not yet connected
@@ -46,27 +42,54 @@ impl ReadConnection {
             loop {
                 match self.data_read_stream.read_u32().await {
                     Ok(message_size) => {
+                        println!("Message size: {}", &message_size);
                         let mut buff = BytesMut::with_capacity(message_size as usize);
+                        // TODO this won't always read the desired amount. Can cause errors when the full message_size is not read
                         match self.data_read_stream.read_buf(&mut buff).await {
-                            Ok(_) => {
+                            Ok(s) => {
+                                println!("Bytes read: {}", s);
                                 output_channel.send(buff).await.expect("Unable to send!")
                             }
                             Err(_) => break,
                         }
                     }
-                    Err(_) => {}
+                    Err(_) => break,
                 }
             }
         });
     }
 }
 
+// impl ReadConnection {
+//     pub async fn read(mut self, output_channel: Sender<BytesMut>) {
+//         tokio::spawn(async move {
+//             loop {
+//                 match self.data_read_stream.read_u32().await {
+//                     Ok(message_size) => {
+//                         println!("Message size: {}", &message_size);
+//                         let mut vec = vec![0; message_size as usize];
+//                         match self.data_read_stream.read_exact(&mut vec).await {
+//                             Ok(s) => {
+//                                 println!("Bytes read: {}", s);
+//                                 // TODO find a way around a copy here
+//                                 let buff = BytesMut::from(&vec[..]);
+//                                 output_channel.send(buff).await.expect("Unable to send!")
+//                             }
+//                             Err(_) => break,
+//                         }
+//                     }
+//                     Err(_) => { break }
+//                 }
+//             }
+//         });
+//     }
+// }
+
 pub struct WriteConnection {
     data_write_stream: BufWriter<WriteHalf<TcpStream>>,
     command_channel: Receiver<Command>,
 }
 
-// TODO this needs to put the payload into a message
 impl WriteConnection {
     pub async fn write(mut self, input_channel: Stealer<BytesMut>) {
         tokio::spawn(async move {
@@ -95,7 +118,6 @@ impl WriteConnection {
             match self.command_channel.recv().await {
                 Ok(command) => match command {
                     Command::Shutdown() => {}
-                    _ => {}
                 },
                 Err(_) => break,
             }
@@ -134,7 +156,7 @@ impl ConnectionLane {
         mut self,
         input_channel: Stealer<BytesMut>,
         output_channel: Sender<BytesMut>,
-        mut stream: TcpStream,
+        stream: TcpStream,
     ) {
         let (read, write) = tokio::io::split(stream);
 
@@ -167,10 +189,9 @@ impl ConnectionLane {
                         write_half_channel
                             .send(Command::Shutdown())
                             .await
-                            .expect("");
+                            .expect("Unable to send!");
                         break;
                     }
-                    _ => {}
                 },
                 Err(_) => break,
             }
@@ -194,7 +215,7 @@ pub struct MessageBusHandle {
 
 impl MessageBus {
     pub fn new(send_to_bus: Sender<BytesMut>) -> (MessageBus, MessageBusHandle) {
-        let mut connections = DashMap::new();
+        let connections = DashMap::new();
         let (tx, rx) = channel::<MessageBusCommand>(100);
         let bus = MessageBus {
             command_channel: rx,
@@ -243,8 +264,14 @@ impl MessageBus {
                     match command {
                         MessageBusCommand::Shutdown() => {
                             // TODO these commands will currently be ignored. Need to be handled by receivers
-                            input_command.send(Command::Shutdown());
-                            output_command.send(Command::Shutdown());
+                            input_command
+                                .send(Command::Shutdown())
+                                .await
+                                .expect("Unable to send!");
+                            output_command
+                                .send(Command::Shutdown())
+                                .await
+                                .expect("Unable to send!");
                         }
                         MessageBusCommand::AddConnection(connection) => {
                             let stealer_clone = stealer.clone();
@@ -278,9 +305,7 @@ impl MessageBusInput {
     pub async fn start(mut self) {
         loop {
             match self.input_channel.recv().await {
-                Ok(message) => {
-                    self.worker.push(message)
-                }
+                Ok(message) => self.worker.push(message),
                 Err(_) => break,
             }
         }
@@ -294,14 +319,14 @@ pub struct MessageBusOutput {
 
 // TODO needs to listen to command channel as well
 impl MessageBusOutput {
-    pub async fn start(mut self, mut from_lanes: Receiver<BytesMut>) {
+    pub async fn start(self, mut from_lanes: Receiver<BytesMut>) {
         loop {
             match from_lanes.recv().await {
                 Ok(message) => {
                     self.output_channel
                         .send(message)
                         .await
-                        .expect("TODO: panic message");
+                        .expect("Unable to send!");
                 }
                 Err(_) => break,
             }

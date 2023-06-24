@@ -8,3 +8,9 @@ edition = "2021"
 [dependencies]
 tokio = { workspace = true }
 bytes = { workspace = true }
+tachyonix = { workspace = true }
+rkyv = { workspace=true }
+uuid = { workspace=true }
+dashmap = { workspace=true }
+
+connection = { path="../common/connection" }

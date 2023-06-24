@@ -30,7 +30,8 @@ impl HashRing {
         let node = RingNode { hash, address };
 
         self.nodes.push(node);
-        self.nodes.sort()
+        self.nodes.sort();
+        println!("Node added at: {}", &address);
     }
 
     pub fn remove_node(&mut self, node: &RingNode) {

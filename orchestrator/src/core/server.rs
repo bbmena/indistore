@@ -88,11 +88,10 @@ impl Server {
                                 .command_channel
                                 .send(Command::Shutdown())
                                 .await
-                                .expect("");
+                                .expect("Unable to send!");
                         }
                         break;
                     }
-                    _ => {}
                 },
                 _ => {}
             }
@@ -187,15 +186,14 @@ impl Connection {
                             read_half_queue
                                 .send(Command::Shutdown())
                                 .await
-                                .expect("TODO: panic message");
+                                .expect("Unable to send!");
                             write_half_queue
                                 .send(Command::Shutdown())
                                 .await
-                                .expect("TODO: panic message");
+                                .expect("Unable to send!");
                             // TODO wait until both have shutdown gracefully
                             break;
                         }
-                        _ => {}
                     }
                 }
                 Err(_) => {}

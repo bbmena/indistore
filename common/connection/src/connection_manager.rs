@@ -9,11 +9,8 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
-use tachyonix::{channel, Receiver, RecvError, Sender};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::broadcast,
-};
+use tachyonix::{channel, Receiver, Sender};
+use tokio::net::{TcpListener, TcpStream};
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,

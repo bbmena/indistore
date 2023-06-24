@@ -1,18 +1,70 @@
-mod api;
+pub mod core;
 
+use bytes::BytesMut;
+use connection::messages::{RouterCommand, RouterRequestWrapper};
+use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
+use tachyonix::channel;
 use tokio::io;
-use tokio::sync::mpsc;
-use connection::message_bus;
-use connection::message_bus::MessageBus;
+
+extern crate rmp_serde as rmps;
+
+use crate::core::router::Router;
+use crate::core::server::Server;
+use connection::connection_manager::ConnectionManager;
+use serde::{Deserialize, Serialize};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
     println!("Hello from orchestrator!");
-    let sa = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 1337);
-    let addresses: Vec<SocketAddr> = vec![sa];
-    let (bus_to_lane, mut lane_from_bus) = mpsc::channel(32);
-    let (lane_to_bus, mut bus_from_lane) = mpsc::channel(32);
-    let mb = MessageBus::init(addresses, lane_from_bus, lane_to_bus );
+
+    let data_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
+    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+    let node_map = Arc::new(DashMap::new());
+
+    let (node_manager, node_manager_handle) =
+        ConnectionManager::new(node_listener_address, node_map.clone());
+
+    let (to_router, for_router) = channel::<RouterRequestWrapper>(10000);
+    let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(10000);
+
+    let (router, router_handle) = Router::new(
+        command_queue_sender.clone(),
+        command_queue_receiver,
+        node_map.clone(),
+    );
+
+    // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
+    let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(10000);
+
+    tokio::spawn(async move {
+        node_manager.start(to_router_from_node).await;
+    });
+
+    tokio::spawn(async move {
+        router
+            .route(for_router, from_node_to_router, node_manager_handle)
+            .await;
+    });
+
+    let (server, server_handle) = Server::new(data_address, to_router);
+    server
+        .serve(command_queue_sender.clone())
+        .await
+        .expect("Unable to start server!");
+
     Ok(())
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Something {
+    key: String,
+    val: String,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Complex {
+    key: String,
+    val: Something,
 }

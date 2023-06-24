@@ -1,9 +1,10 @@
 use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
-use connection::connection_manager::{ConnectionManager, ConnectionManagerHandle};
+use connection::connection_manager::ConnectionManagerHandle;
 use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    ArchivedMessage, ChannelSubscribe, Command, Message, RouterCommand, RouterRequestWrapper,
+    ArchivedRequest, ArchivedResponse, ChannelSubscribe, Request, Response, RouterCommand,
+    RouterRequestWrapper,
 };
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
@@ -156,13 +157,12 @@ impl RequestQueueProcessor {
         loop {
             let message = self.request_queue.recv().await.expect("Unable to read!");
             let buff = message.body;
-            let message_archive: &Archived<Message> =
-                rkyv::check_archived_root::<Message>(&buff[..]).unwrap();
+            let message_archive: &Archived<Request> =
+                rkyv::check_archived_root::<Request>(&buff[..]).unwrap();
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
-                ArchivedMessage::Get(request) => Some((&request.key, &request.id)),
-                ArchivedMessage::Put(request) => Some((&request.key, &request.id)),
-                ArchivedMessage::Delete(request) => Some((&request.key, &request.id)),
-                _ => None,
+                ArchivedRequest::Get(request) => Some((&request.key, &request.id)),
+                ArchivedRequest::Put(request) => Some((&request.key, &request.id)),
+                ArchivedRequest::Delete(request) => Some((&request.key, &request.id)),
             };
             match routing_info {
                 Some(routing_info) => {
@@ -204,15 +204,17 @@ impl ResponseQueueProcessor {
     async fn process(&mut self) {
         loop {
             let buff = self.response_queue.recv().await.expect("Unable to read!");
-            let message_archive: &Archived<Message> =
-                rkyv::check_archived_root::<Message>(&buff[..]).unwrap();
+            let message_archive: &Archived<Response> =
+                rkyv::check_archived_root::<Response>(&buff[..]).unwrap();
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
-                ArchivedMessage::GetResponse(response) => Some((&response.key, &response.id)),
-                ArchivedMessage::PutResponse(response) => Some((&response.key, &response.id)),
+                ArchivedResponse::GetResponse(response) => Some((&response.key, &response.id)),
+                ArchivedResponse::PutResponse(response) => Some((&response.key, &response.id)),
+                ArchivedResponse::InvalidResponse(response) => Some((&response.key, &response.id)),
                 _ => None,
             };
             match routing_info {
                 Some(routing_info) => {
+                    println!("Processing response!");
                     let response_id = routing_info.1;
                     let channel_id = self
                         .message_to_channel_map

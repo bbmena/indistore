@@ -1,4 +1,3 @@
-use crate::message_bus::MessageBusHandle;
 use bytes::BytesMut;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
@@ -12,6 +11,8 @@ use uuid::Uuid;
 // #[archive_attr(repr(C))]
 pub struct GetRequest {
     pub id: Uuid,
+    // Orchestrator IP, NOT client IP
+    pub request_origin: IpAddr,
     pub key: String,
 }
 
@@ -20,6 +21,8 @@ pub struct GetRequest {
 // #[archive_attr(repr(C))]
 pub struct PutRequest {
     pub id: Uuid,
+    // Orchestrator IP, NOT client IP
+    pub request_origin: IpAddr,
     pub key: String,
     pub payload: Vec<u8>,
 }
@@ -28,6 +31,8 @@ pub struct PutRequest {
 #[archive(compare(PartialEq), check_bytes)]
 pub struct DeleteRequest {
     pub id: Uuid,
+    // Orchestrator IP, NOT client IP
+    pub request_origin: IpAddr,
     pub key: String,
 }
 
@@ -54,16 +59,54 @@ pub struct InvalidResponse {
     pub key: String,
 }
 
+pub trait RequestOrigin {
+    fn request_origin(&self) -> IpAddr;
+}
+
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[archive(compare(PartialEq), check_bytes)]
-pub enum Message {
+pub enum Request {
     Get(GetRequest),
     Put(PutRequest),
     Delete(DeleteRequest),
+}
+
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[archive(compare(PartialEq), check_bytes)]
+pub enum Response {
     GetResponse(GetResponse),
     PutResponse(PutResponse),
     DeleteResponse(),
-    InvalidResponse(InvalidResponse)
+    InvalidResponse(InvalidResponse),
+}
+
+impl RequestOrigin for Request {
+    fn request_origin(&self) -> IpAddr {
+        match self {
+            Request::Get(get) => get.request_origin,
+            Request::Put(put) => put.request_origin,
+            Request::Delete(delete) => delete.request_origin,
+        }
+    }
+}
+
+impl RequestOrigin for ArchivedRequest {
+    fn request_origin(&self) -> IpAddr {
+        match self {
+            ArchivedRequest::Get(get) => get
+                .request_origin
+                .deserialize(&mut rkyv::Infallible)
+                .unwrap(),
+            ArchivedRequest::Put(put) => put
+                .request_origin
+                .deserialize(&mut rkyv::Infallible)
+                .unwrap(),
+            ArchivedRequest::Delete(delete) => delete
+                .request_origin
+                .deserialize(&mut rkyv::Infallible)
+                .unwrap(),
+        }
+    }
 }
 
 pub enum NodeManagerCommand {
