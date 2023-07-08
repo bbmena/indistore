@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    ArchivedGetRequest, ArchivedPutRequest, ArchivedDeleteRequest, ArchivedRequest, Command, GetResponse, InvalidResponse,
-    PutResponse, Request, RequestOrigin, Response,
+    ArchivedDeleteRequest, ArchivedGetRequest, ArchivedPutRequest, ArchivedRequest, Command,
+    GetResponse, InvalidResponse, PutResponse, Request, RequestOrigin, Response,
 };
 use dashmap::DashMap;
 use rkyv::Archived;
@@ -111,6 +111,16 @@ fn handle_delete(
     Some(Response::DeleteResponse())
 }
 
+fn retrieve_response_channel(
+    channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    origination_address: IpAddr,
+) -> Sender<BytesMut> {
+    let response_channel = channel_map
+        .get(&origination_address)
+        .expect("Channel not found");
+    response_channel.send_to_bus.clone()
+}
+
 impl DataStoreRequestHandler {
     pub async fn start(
         mut self,
@@ -126,7 +136,7 @@ impl DataStoreRequestHandler {
 
                 let origination_address = message_archive.request_origin();
 
-                // Any interaction with the map needs to be wrapped in a sync function. Async access can cause deadlock
+                // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
                 let response = match message_archive {
                     ArchivedRequest::Get(request) => handle_get(request, data.clone()),
                     ArchivedRequest::Put(request) => handle_put(request, data.clone()),
@@ -138,14 +148,11 @@ impl DataStoreRequestHandler {
                     Some(resp) => {
                         let buff = rkyv::to_bytes::<_, 1024>(&resp).expect("Can't serialize!");
                         let bytes = BytesMut::from(&buff[..]);
-                        let response_channel = channel_map
-                            .get(&origination_address)
-                            .expect("Channel not found");
-                        response_channel
-                            .send_to_bus
-                            .send(bytes)
-                            .await
-                            .expect("Unable to send!");
+                        // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
+                        let mut response_channel =
+                            retrieve_response_channel(channel_map.clone(), origination_address);
+                        response_channel.send(bytes).await.expect("Unable to send!");
+                        drop(response_channel);
                     }
                 }
             }
