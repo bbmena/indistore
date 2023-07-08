@@ -1,8 +1,8 @@
 use bytes::BytesMut;
 use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    ArchivedRequest, Command, GetResponse, InvalidResponse, PutResponse, Request, RequestOrigin,
-    Response,
+    ArchivedGetRequest, ArchivedPutRequest, ArchivedDeleteRequest, ArchivedRequest, Command, GetResponse, InvalidResponse,
+    PutResponse, Request, RequestOrigin, Response,
 };
 use dashmap::DashMap;
 use rkyv::Archived;
@@ -72,6 +72,45 @@ pub struct DataStoreRequestHandler {
     command_channel: Receiver<Command>,
 }
 
+fn handle_get(
+    request: &ArchivedGetRequest,
+    data: Arc<DashMap<String, BytesMut>>,
+) -> Option<Response> {
+    match data.get(request.key.as_str()) {
+        None => Some(Response::InvalidResponse(InvalidResponse {
+            id: request.id,
+            key: request.key.to_string(),
+        })),
+        Some(value) => Some(Response::GetResponse(GetResponse {
+            id: request.id,
+            key: request.key.to_string(),
+            payload: Vec::from(value.value().clone()),
+        })),
+    }
+}
+
+fn handle_put(
+    request: &ArchivedPutRequest,
+    data: Arc<DashMap<String, BytesMut>>,
+) -> Option<Response> {
+    let bytes = BytesMut::from(&request.payload[..]);
+    data.insert(request.key.to_string(), bytes);
+    Some(Response::PutResponse(PutResponse {
+        id: request.id,
+        key: request.key.to_string(),
+        success: true,
+    }))
+}
+
+// Basically just an ack at this point
+fn handle_delete(
+    request: &ArchivedDeleteRequest,
+    data: Arc<DashMap<String, BytesMut>>,
+) -> Option<Response> {
+    data.remove(&request.key.to_string());
+    Some(Response::DeleteResponse())
+}
+
 impl DataStoreRequestHandler {
     pub async fn start(
         mut self,
@@ -87,28 +126,11 @@ impl DataStoreRequestHandler {
 
                 let origination_address = message_archive.request_origin();
 
+                // Any interaction with the map needs to be wrapped in a sync function. Async access can cause deadlock
                 let response = match message_archive {
-                    ArchivedRequest::Get(request) => match data.get(request.key.as_str()) {
-                        None => Some(Response::InvalidResponse(InvalidResponse {
-                            id: request.id,
-                            key: request.key.to_string(),
-                        })),
-                        Some(value) => Some(Response::GetResponse(GetResponse {
-                            id: request.id,
-                            key: request.key.to_string(),
-                            payload: Vec::from(value.value().clone()),
-                        })),
-                    },
-                    ArchivedRequest::Put(request) => {
-                        let bytes = BytesMut::from(&request.payload[..]);
-                        data.insert(request.key.to_string(), bytes);
-                        Some(Response::PutResponse(PutResponse {
-                            id: request.id,
-                            key: request.key.to_string(),
-                            success: true,
-                        }))
-                    }
-                    ArchivedRequest::Delete(_) => Some(Response::DeleteResponse()),
+                    ArchivedRequest::Get(request) => handle_get(request, data.clone()),
+                    ArchivedRequest::Put(request) => handle_put(request, data.clone()),
+                    ArchivedRequest::Delete(request) => handle_delete(request, data.clone()),
                 };
 
                 match response {
