@@ -138,8 +138,10 @@ async fn start_new_bus(
     input_channel: Receiver<BytesMut>,
     output_channel: Sender<BytesMut>,
 ) {
-    let work_queue = Worker::new_fifo();
-    let stealer = work_queue.stealer();
+    // let work_queue = Worker::new_fifo();
+    // let stealer = work_queue.stealer();
+
+    let (work_queue, stealer) = async_channel::bounded(10000);
 
     message_bus
         .start(input_channel, output_channel, work_queue, stealer)

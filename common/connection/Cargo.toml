@@ -15,3 +15,5 @@ rmp-serde = { workspace=true }
 rkyv = { workspace=true }
 dashmap = { workspace=true }
 crossbeam-deque = { workspace=true }
+
+async-channel = "1.9.0"

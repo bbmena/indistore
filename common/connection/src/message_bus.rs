@@ -6,6 +6,9 @@ use tachyonix::{channel, Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
+use async_channel::{Receiver as Async_Receiver};
+use async_channel::Sender as Async_Sender;
+
 use crate::messages::{Command, MessageBusCommand};
 
 /**
@@ -67,28 +70,44 @@ pub struct WriteConnection {
 }
 
 impl WriteConnection {
-    pub async fn write(mut self, input_channel: Stealer<BytesMut>) {
+    pub async fn write(mut self, input_channel: Async_Receiver<BytesMut>, self_address: SocketAddr, target_address: SocketAddr) {
         tokio::spawn(async move {
             loop {
-                // TODO this is looping endlessly. Causing high overhead
-                match input_channel.steal() {
-                    Steal::Success(mut buffer) => {
-                        self.data_write_stream
-                            .write_u32(buffer.len() as u32)
-                            .await
-                            .expect("");
+                let mut buffer = input_channel.recv().await.expect("unable to receive!");
+                // println!("writing on {}. Writing to {}", &self_address, &target_address);
+                self.data_write_stream
+                    .write_u32(buffer.len() as u32)
+                    .await
+                    .expect("");
 
-                        self.data_write_stream
-                            .write_buf(&mut buffer)
-                            .await
-                            .expect("Unable to write buffer!");
-                        match self.data_write_stream.flush().await {
-                            Err(_) => break,
-                            _ => {}
-                        }
-                    }
+                self.data_write_stream
+                    .write_buf(&mut buffer)
+                    .await
+                    .expect("Unable to write buffer!");
+                match self.data_write_stream.flush().await {
+                    Err(_) => break,
                     _ => {}
                 }
+
+
+                // match input_channel.steal() {
+                //     Steal::Success(mut buffer) => {
+                //         self.data_write_stream
+                //             .write_u32(buffer.len() as u32)
+                //             .await
+                //             .expect("");
+                //
+                //         self.data_write_stream
+                //             .write_buf(&mut buffer)
+                //             .await
+                //             .expect("Unable to write buffer!");
+                //         match self.data_write_stream.flush().await {
+                //             Err(_) => break,
+                //             _ => {}
+                //         }
+                //     }
+                //     _ => {}
+                // }
             }
         });
         loop {
@@ -131,10 +150,13 @@ impl ConnectionLane {
 
     pub async fn start(
         mut self,
-        input_channel: Stealer<BytesMut>,
+        input_channel: Async_Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
         stream: TcpStream,
     ) {
+        let local_address = stream.local_addr().expect("oh noes").clone();
+        let target_address = stream.peer_addr().expect("oh noes").clone();
+        println!("Starting new lane at {}", &local_address);
         let (read, write) = tokio::io::split(stream);
 
         let (read_half_channel, read_command_channel) = channel::<Command>(100);
@@ -151,7 +173,7 @@ impl ConnectionLane {
         };
 
         tokio::spawn(async move {
-            write.write(input_channel).await;
+            write.write(input_channel, local_address, target_address).await;
         });
 
         tokio::spawn(async move {
@@ -210,8 +232,8 @@ impl MessageBus {
         mut self,
         input_channel: Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
-        work_queue: Worker<BytesMut>,
-        stealer: Stealer<BytesMut>,
+        work_queue: Async_Sender<BytesMut>,
+        stealer: Async_Receiver<BytesMut>,
     ) {
         let (lane_sender, receive_from_lane) = channel(1000);
 
@@ -273,7 +295,7 @@ impl MessageBus {
 
 pub struct MessageBusInput {
     input_channel: Receiver<BytesMut>,
-    worker: Worker<BytesMut>,
+    worker: Async_Sender<BytesMut>,
     command_channel: Receiver<Command>,
 }
 
@@ -282,7 +304,7 @@ impl MessageBusInput {
     pub async fn start(mut self) {
         loop {
             match self.input_channel.recv().await {
-                Ok(message) => self.worker.push(message),
+                Ok(message) => self.worker.send(message).await.expect("unable to send!"),
                 Err(_) => break,
             }
         }
