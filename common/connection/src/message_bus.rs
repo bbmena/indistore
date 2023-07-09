@@ -42,12 +42,13 @@ impl ReadConnection {
             loop {
                 match self.data_read_stream.read_u32().await {
                     Ok(message_size) => {
-                        println!("Message size: {}", &message_size);
-                        let mut buff = BytesMut::with_capacity(message_size as usize);
-                        // TODO this won't always read the desired amount. Can cause errors when the full message_size is not read
-                        match self.data_read_stream.read_buf(&mut buff).await {
+                        // println!("Message size: {}", &message_size);
+                        let mut vec = vec![0; message_size as usize];
+                        match self.data_read_stream.read_exact(&mut vec).await {
                             Ok(s) => {
-                                println!("Bytes read: {}", s);
+                                // println!("Bytes read: {}", s);
+                                // TODO find a way around a copy here
+                                let buff = BytesMut::from(&vec[..]);
                                 output_channel.send(buff).await.expect("Unable to send!")
                             }
                             Err(_) => break,
@@ -60,31 +61,6 @@ impl ReadConnection {
     }
 }
 
-// impl ReadConnection {
-//     pub async fn read(mut self, output_channel: Sender<BytesMut>) {
-//         tokio::spawn(async move {
-//             loop {
-//                 match self.data_read_stream.read_u32().await {
-//                     Ok(message_size) => {
-//                         println!("Message size: {}", &message_size);
-//                         let mut vec = vec![0; message_size as usize];
-//                         match self.data_read_stream.read_exact(&mut vec).await {
-//                             Ok(s) => {
-//                                 println!("Bytes read: {}", s);
-//                                 // TODO find a way around a copy here
-//                                 let buff = BytesMut::from(&vec[..]);
-//                                 output_channel.send(buff).await.expect("Unable to send!")
-//                             }
-//                             Err(_) => break,
-//                         }
-//                     }
-//                     Err(_) => { break }
-//                 }
-//             }
-//         });
-//     }
-// }
-
 pub struct WriteConnection {
     data_write_stream: BufWriter<WriteHalf<TcpStream>>,
     command_channel: Receiver<Command>,
@@ -94,6 +70,7 @@ impl WriteConnection {
     pub async fn write(mut self, input_channel: Stealer<BytesMut>) {
         tokio::spawn(async move {
             loop {
+                // TODO this is looping endlessly. Causing high overhead
                 match input_channel.steal() {
                     Steal::Success(mut buffer) => {
                         self.data_write_stream
