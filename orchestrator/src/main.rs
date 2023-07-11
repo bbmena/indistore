@@ -23,6 +23,7 @@ async fn main() -> io::Result<()> {
     let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
     let node_map = Arc::new(DashMap::new());
 
+    // TODO ConnectionManager needs to be able to listen on multiple ports
     let (node_manager, node_manager_handle) =
         ConnectionManager::new(node_listener_address, node_map.clone());
 

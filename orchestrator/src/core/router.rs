@@ -205,7 +205,7 @@ impl ResponseQueueProcessor {
         loop {
             let buff = self.response_queue.recv().await.expect("Unable to read!");
             let message_archive: &Archived<Response> =
-                rkyv::check_archived_root::<Response>(&buff[..]).unwrap();
+                rkyv::check_archived_root::<Response>(&buff[..]).unwrap(); // TODO this starts to run into errors when a high number of channels are open from one client
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
                 ArchivedResponse::GetResponse(response) => Some((&response.key, &response.id)),
                 ArchivedResponse::PutResponse(response) => Some((&response.key, &response.id)),
@@ -214,7 +214,6 @@ impl ResponseQueueProcessor {
             };
             match routing_info {
                 Some(routing_info) => {
-                    println!("Processing response!");
                     let response_id = routing_info.1;
                     let channel_id = self
                         .message_to_channel_map
