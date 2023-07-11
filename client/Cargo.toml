@@ -1,0 +1,19 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rmp-serde = { workspace=true }
+serde = { workspace=true }
+rmpv = { workspace=true }
+tokio = { workspace=true }
+uuid = { workspace=true }
+socket2 = "0.5.2"
+bytes = { workspace=true }
+rkyv = { workspace=true }
+dashmap = { workspace=true }
+
+connection = { path="../common/connection" }
