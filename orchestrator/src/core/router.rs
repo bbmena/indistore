@@ -3,8 +3,8 @@ use bytes::BytesMut;
 use connection::connection_manager::ConnectionManagerHandle;
 use connection::message_bus::MessageBusHandle;
 use connection::messages::{
-    ArchivedRequest, ArchivedResponse, ChannelSubscribe, Request, Response, RouterCommand,
-    RouterRequestWrapper,
+    ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
+    RouterCommand, RouterRequestWrapper,
 };
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
@@ -130,6 +130,9 @@ impl Router {
                     RouterCommand::AddNode(address) => {
                         self.hash_ring.lock().await.add_node(address)
                     }
+                    RouterCommand::Unsubscribe(unsub) => {
+                        self.remove_subscriber(unsub);
+                    }
                 },
                 Err(_) => break,
             }
@@ -149,6 +152,11 @@ impl Router {
     fn add_subscriber(&self, sub: ChannelSubscribe) {
         self.channel_map
             .insert(ChannelId::new(sub.channel_id), sub.response_channel);
+    }
+
+    // TODO: Unsub message could fail to be sent in the case of a thread panic. Might be good to add a periodic job to purge stale subscriptions.
+    fn remove_subscriber(&self, unsub: ChannelUnsubscribe) {
+        self.channel_map.remove(&ChannelId::new(unsub.channel_id));
     }
 }
 

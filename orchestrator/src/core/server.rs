@@ -26,7 +26,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Wri
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use connection::messages::{ChannelSubscribe, Command, RouterCommand, RouterRequestWrapper};
+use connection::messages::{
+    ChannelSubscribe, ChannelUnsubscribe, Command, RouterCommand, RouterRequestWrapper,
+};
 
 pub struct ServerHandle {
     command_channel: Sender<Command>,
@@ -68,9 +70,11 @@ impl Server {
                 match data_listener.accept().await {
                     Ok((stream, _)) => {
                         let (connection, connection_handle) = Connection::new();
+                        let self_sender = connection_handle.command_channel.clone();
+                        // TODO this ref needs to be removed when the connection gets closed
                         connections_ref.insert(connection.channel_id, connection_handle);
                         tokio::spawn(async move {
-                            connection.start(stream, r_c, r_c_q).await;
+                            connection.start(stream, r_c, r_c_q, self_sender).await;
                         });
                     }
                     Err(_) => break,
@@ -143,6 +147,7 @@ impl Connection {
         stream: TcpStream,
         send_to_router: Sender<RouterRequestWrapper>,
         router_command_queue: Sender<RouterCommand>,
+        self_sender: Sender<Command>
     ) {
         let (read, write) = tokio::io::split(stream);
         let (read_half_queue, read_input_queue) = channel::<Command>(100);
@@ -170,12 +175,12 @@ impl Connection {
             router_channel: receive_from_router,
         };
 
-        tokio::spawn(async move {
+        let write_handle = tokio::spawn(async move {
             write_connection.write().await;
         });
 
-        tokio::spawn(async move {
-            read_connection.read(self.channel_id).await;
+        let read_handle = tokio::spawn(async move {
+            read_connection.read(self.channel_id, self_sender).await;
         });
 
         loop {
@@ -183,27 +188,40 @@ impl Connection {
                 Ok(command) => {
                     match command {
                         Command::Shutdown() => {
-                            read_half_queue
-                                .send(Command::Shutdown())
-                                .await
-                                .expect("Unable to send!");
+                            // ReadConnection may be the one sending the Shutdown command, so check that it is open before trying to send
+                            if !read_half_queue.is_closed() {
+                                read_half_queue
+                                    .send(Command::Shutdown())
+                                    .await
+                                    .expect("Unable to send!");
+                            }
                             write_half_queue
                                 .send(Command::Shutdown())
                                 .await
                                 .expect("Unable to send!");
-                            // TODO wait until both have shutdown gracefully
+                            // Wait until both have closed before closing the Connection object
+                            // TODO write_handle needs to process the shutdown command
+                            // while !read_handle.is_finished() || !write_handle.is_finished() {
+                            //     sleep(Duration::from_millis(1))
+                            // }
                             break;
                         }
                     }
                 }
-                Err(_) => {}
+                Err(_) => { break }
             }
         }
+        router_command_queue
+            .send(RouterCommand::Unsubscribe(ChannelUnsubscribe {
+                channel_id: self.channel_id,
+            }))
+            .await
+            .expect("Unable to Subscribe!");
     }
 }
 
 impl ReadConnection {
-    async fn read(mut self, channel_id: Uuid) {
+    async fn read(mut self, channel_id: Uuid, server_command_channel: Sender<Command>) {
         loop {
             match self.data_read_stream.read_u32().await {
                 Ok(message_size) => {
@@ -225,6 +243,7 @@ impl ReadConnection {
                 Err(_) => break,
             }
         }
+        server_command_channel.send(Command::Shutdown()).await.expect("Cannot send!");
     }
 }
 
