@@ -214,7 +214,6 @@ impl ResponseQueueProcessor {
             };
             match routing_info {
                 Some(routing_info) => {
-                    println!("Processing response!");
                     let response_id = routing_info.1;
                     let channel_id = self
                         .message_to_channel_map
