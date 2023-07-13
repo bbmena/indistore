@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use rkyv::{Archive, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize, with::CopyOptimize};
 use std::net::{IpAddr, SocketAddr};
 use tachyonix::Sender;
 use tokio::net::TcpStream;
@@ -24,6 +24,7 @@ pub struct PutRequest {
     // Orchestrator IP, NOT client IP
     pub request_origin: IpAddr,
     pub key: String,
+    #[with(CopyOptimize)]
     pub payload: Vec<u8>,
 }
 
@@ -41,6 +42,7 @@ pub struct DeleteRequest {
 pub struct GetResponse {
     pub id: Uuid,
     pub key: String,
+    #[with(CopyOptimize)]
     pub payload: Vec<u8>,
 }
 
