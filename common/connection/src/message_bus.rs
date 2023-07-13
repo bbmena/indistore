@@ -1,12 +1,11 @@
 use bytes::BytesMut;
-use crossbeam_deque::{Steal, Stealer, Worker};
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
-use async_channel::{Receiver as Async_Receiver};
+use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
 
 use crate::messages::{Command, MessageBusCommand};
@@ -45,11 +44,9 @@ impl ReadConnection {
             loop {
                 match self.data_read_stream.read_u32().await {
                     Ok(message_size) => {
-                        // println!("Message size: {}", &message_size);
                         let mut vec = vec![0; message_size as usize];
                         match self.data_read_stream.read_exact(&mut vec).await {
                             Ok(s) => {
-                                // println!("Bytes read: {}", s);
                                 // TODO find a way around a copy here
                                 let buff = BytesMut::from(&vec[..]);
                                 output_channel.send(buff).await.expect("Unable to send!")
@@ -74,7 +71,6 @@ impl WriteConnection {
         tokio::spawn(async move {
             loop {
                 let mut buffer = input_channel.recv().await.expect("unable to receive!");
-                // println!("writing on {}. Writing to {}", &self_address, &target_address);
                 self.data_write_stream
                     .write_u32(buffer.len() as u32)
                     .await
@@ -88,26 +84,6 @@ impl WriteConnection {
                     Err(_) => break,
                     _ => {}
                 }
-
-
-                // match input_channel.steal() {
-                //     Steal::Success(mut buffer) => {
-                //         self.data_write_stream
-                //             .write_u32(buffer.len() as u32)
-                //             .await
-                //             .expect("");
-                //
-                //         self.data_write_stream
-                //             .write_buf(&mut buffer)
-                //             .await
-                //             .expect("Unable to write buffer!");
-                //         match self.data_write_stream.flush().await {
-                //             Err(_) => break,
-                //             _ => {}
-                //         }
-                //     }
-                //     _ => {}
-                // }
             }
         });
         loop {
