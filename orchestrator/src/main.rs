@@ -27,8 +27,8 @@ async fn main() -> io::Result<()> {
     let (node_manager, node_manager_handle) =
         ConnectionManager::new(node_listener_address, node_map.clone());
 
-    let (to_router, for_router) = channel::<RouterRequestWrapper>(10000);
-    let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(10000);
+    let (to_router, for_router) = channel::<RouterRequestWrapper>(200_000);
+    let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(1000);
 
     let (router, router_handle) = Router::new(
         command_queue_sender.clone(),
@@ -37,7 +37,7 @@ async fn main() -> io::Result<()> {
     );
 
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
-    let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(10000);
+    let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(200_000);
 
     tokio::spawn(async move {
         node_manager.start(to_router_from_node).await;

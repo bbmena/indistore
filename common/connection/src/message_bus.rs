@@ -1,6 +1,7 @@
 use bytes::BytesMut;
 use dashmap::DashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
@@ -67,7 +68,12 @@ pub struct WriteConnection {
 }
 
 impl WriteConnection {
-    pub async fn write(mut self, input_channel: Async_Receiver<BytesMut>, self_address: SocketAddr, target_address: SocketAddr) {
+    pub async fn write(
+        mut self,
+        input_channel: Async_Receiver<BytesMut>,
+        self_address: SocketAddr,
+        target_address: SocketAddr,
+    ) {
         tokio::spawn(async move {
             loop {
                 let mut buffer = input_channel.recv().await.expect("unable to receive!");
@@ -149,7 +155,9 @@ impl ConnectionLane {
         };
 
         tokio::spawn(async move {
-            write.write(input_channel, local_address, target_address).await;
+            write
+                .write(input_channel, local_address, target_address)
+                .await;
         });
 
         tokio::spawn(async move {
@@ -211,7 +219,7 @@ impl MessageBus {
         work_queue: Async_Sender<BytesMut>,
         stealer: Async_Receiver<BytesMut>,
     ) {
-        let (lane_sender, receive_from_lane) = channel(1000);
+        let (lane_sender, receive_from_lane) = channel(200_000);
 
         let (input_command, rx) = channel(100);
         let input = MessageBusInput {
@@ -307,4 +315,15 @@ impl MessageBusOutput {
             }
         }
     }
+}
+
+#[inline]
+pub fn retrieve_response_channel(
+    channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    origination_address: IpAddr,
+) -> Sender<BytesMut> {
+    let response_channel = channel_map
+        .get(&origination_address)
+        .expect("Channel not found");
+    response_channel.send_to_bus.clone()
 }

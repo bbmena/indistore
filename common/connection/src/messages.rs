@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use rkyv::{Archive, Deserialize, Serialize, with::CopyOptimize};
+use rkyv::{with::CopyOptimize, Archive, Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use tachyonix::Sender;
 use tokio::net::TcpStream;

@@ -1,7 +1,7 @@
 use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
 use connection::connection_manager::ConnectionManagerHandle;
-use connection::message_bus::MessageBusHandle;
+use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
 use connection::messages::{
     ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
     RouterCommand, RouterRequestWrapper,
@@ -173,26 +173,22 @@ impl RequestQueueProcessor {
                 ArchivedRequest::Delete(request) => Some((&request.key, &request.id)),
             };
             match routing_info {
-                Some(routing_info) => {
-                    let request_id = routing_info.1.clone();
+                Some((key, req_id)) => {
+                    let request_id = req_id.clone();
                     match self
                         .hash_ring
                         .lock()
                         .await
-                        .find_key_owner(routing_info.0.as_str().into())
+                        .find_key_owner(key.as_str().into())
                     {
                         None => {
                             println!("Unable to find address!")
                         }
                         Some(addr) => {
-                            {
-                                let node_lane = self.node_map.get(&addr).expect("Node not found!");
-                                node_lane
-                                    .send_to_bus
-                                    .send(buff)
-                                    .await
-                                    .expect("Unable to send!");
-                            }
+                            let response_channel =
+                                retrieve_response_channel(self.node_map.clone(), addr);
+                            response_channel.send(buff).await.expect("Unable to send!");
+
                             self.message_to_channel_map.insert(
                                 MessageId::new(request_id),
                                 ChannelId::new(message.channel_id),
@@ -221,16 +217,18 @@ impl ResponseQueueProcessor {
                 _ => None,
             };
             match routing_info {
-                Some(routing_info) => {
-                    let response_id = routing_info.1;
+                Some((_, response_id)) => {
                     let channel_id = self
                         .message_to_channel_map
                         .get(&MessageId::new(response_id.clone()))
                         .expect("Message ID not found!");
-                    let sender = self
-                        .channel_map
-                        .get(&*channel_id)
-                        .expect("Channel ID not found!");
+                    let sender = {
+                        self.channel_map
+                            .get(channel_id.value())
+                            .expect("Channel ID not found!")
+                            .value()
+                            .clone()
+                    };
                     sender.send(buff).await.expect("TODO: panic message");
                 }
                 None => {

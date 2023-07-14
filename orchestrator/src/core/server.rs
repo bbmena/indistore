@@ -147,13 +147,13 @@ impl Connection {
         stream: TcpStream,
         send_to_router: Sender<RouterRequestWrapper>,
         router_command_queue: Sender<RouterCommand>,
-        self_sender: Sender<Command>
+        self_sender: Sender<Command>,
     ) {
         let (read, write) = tokio::io::split(stream);
         let (read_half_queue, read_input_queue) = channel::<Command>(100);
         let (write_half_queue, write_input_queue) = channel::<Command>(100);
 
-        let (router_sender, receive_from_router) = channel::<BytesMut>(1000);
+        let (router_sender, receive_from_router) = channel::<BytesMut>(200_000);
 
         router_command_queue
             .send(RouterCommand::Subscribe(ChannelSubscribe {
@@ -208,7 +208,7 @@ impl Connection {
                         }
                     }
                 }
-                Err(_) => { break }
+                Err(_) => break,
             }
         }
         router_command_queue
@@ -243,7 +243,10 @@ impl ReadConnection {
                 Err(_) => break,
             }
         }
-        server_command_channel.send(Command::Shutdown()).await.expect("Cannot send!");
+        server_command_channel
+            .send(Command::Shutdown())
+            .await
+            .expect("Cannot send!");
     }
 }
 

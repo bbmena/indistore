@@ -23,7 +23,7 @@ async fn main() -> io::Result<()> {
 
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
     // give from_node_to_router to the data store to answer requests
-    let (to_data_store_from_node, from_node_to_data_store) = channel::<BytesMut>(10000);
+    let (to_data_store_from_node, from_node_to_data_store) = channel::<BytesMut>(200_000);
 
     tokio::spawn(async move {
         orchestrator_manager.start(to_data_store_from_node).await;

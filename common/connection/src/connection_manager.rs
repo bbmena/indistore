@@ -3,7 +3,6 @@ use crate::messages::{
     AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand,
 };
 use bytes::BytesMut;
-use crossbeam_deque::Worker;
 use dashmap::DashMap;
 use std::{
     net::{IpAddr, SocketAddr},
@@ -56,7 +55,7 @@ impl ConnectionManager {
                     Ok((stream, address)) => {
                         println!("New connection request from {}", &address);
                         if !node_map.contains_key(&address.ip()) {
-                            let (send_to_bus, input_channel) = channel::<BytesMut>(1000);
+                            let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                             let (message_bus, handle) = MessageBus::new(send_to_bus);
 
@@ -101,7 +100,7 @@ impl ConnectionManager {
                                 .await
                                 .expect("Unable to connect!");
                             if !self.node_map.contains_key(&connect.address.ip()) {
-                                let (send_to_bus, input_channel) = channel::<BytesMut>(1000);
+                                let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                                 let (message_bus, handle) = MessageBus::new(send_to_bus);
 
@@ -138,10 +137,7 @@ async fn start_new_bus(
     input_channel: Receiver<BytesMut>,
     output_channel: Sender<BytesMut>,
 ) {
-    // let work_queue = Worker::new_fifo();
-    // let stealer = work_queue.stealer();
-
-    let (work_queue, stealer) = async_channel::bounded(10000);
+    let (work_queue, stealer) = async_channel::bounded(200_000);
 
     message_bus
         .start(input_channel, output_channel, work_queue, stealer)

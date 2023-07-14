@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use connection::message_bus::MessageBusHandle;
+use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
 use connection::messages::{
     ArchivedDeleteRequest, ArchivedGetRequest, ArchivedPutRequest, ArchivedRequest, Command,
     GetResponse, InvalidResponse, PutResponse, Request, RequestOrigin, Response,
@@ -111,15 +111,15 @@ fn handle_delete(
     Some(Response::DeleteResponse())
 }
 
-fn retrieve_response_channel(
-    channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-    origination_address: IpAddr,
-) -> Sender<BytesMut> {
-    let response_channel = channel_map
-        .get(&origination_address)
-        .expect("Channel not found");
-    response_channel.send_to_bus.clone()
-}
+// fn retrieve_response_channel(
+//     channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+//     origination_address: IpAddr,
+// ) -> Sender<BytesMut> {
+//     let response_channel = channel_map
+//         .get(&origination_address)
+//         .expect("Channel not found");
+//     response_channel.send_to_bus.clone()
+// }
 
 impl DataStoreRequestHandler {
     pub async fn start(

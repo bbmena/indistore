@@ -21,3 +21,6 @@ async-channel = "1.9.0"
 
 tachyonix = "0.2.0"
 rkyv = { version = "0.7.42", features = ["validation", "uuid"] }
+
+[profile.release]
+debug = true
