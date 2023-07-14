@@ -153,7 +153,8 @@ impl Connection {
         let (read_half_queue, read_input_queue) = channel::<Command>(100);
         let (write_half_queue, write_input_queue) = channel::<Command>(100);
 
-        let (router_sender, receive_from_router) = channel::<BytesMut>(200_000);
+        // large channel size causes slowdown on first request but subsequent requests are unaffected
+        let (router_sender, receive_from_router) = channel::<BytesMut>(20_000);
 
         router_command_queue
             .send(RouterCommand::Subscribe(ChannelSubscribe {
