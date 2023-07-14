@@ -10,12 +10,14 @@ use std::{
 };
 use tachyonix::{channel, Receiver, Sender};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::task::JoinHandle;
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
-    address: SocketAddr,
+    address: IpAddr,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     notifier: Sender<ConnectionNotification>,
+    ports: Vec<u16>
 }
 
 pub struct ConnectionManagerHandle {
@@ -25,8 +27,9 @@ pub struct ConnectionManagerHandle {
 
 impl ConnectionManager {
     pub fn new(
-        address: SocketAddr,
+        address: IpAddr,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+        ports: Vec<u16>
     ) -> (ConnectionManager, ConnectionManagerHandle) {
         let (command_sender, command_receiver) = channel(100);
         let (notifier, notification_receiver) = channel(100);
@@ -36,6 +39,7 @@ impl ConnectionManager {
             address,
             node_map,
             notifier,
+            ports,
         };
 
         let node_listener_handle = ConnectionManagerHandle {
@@ -46,44 +50,23 @@ impl ConnectionManager {
     }
 
     pub async fn start(mut self, output_channel: Sender<BytesMut>) {
-        let data_listener = TcpListener::bind(self.address).await.unwrap();
-        let node_map = self.node_map.clone();
-        let output_clone = output_channel.clone();
-        let listener = tokio::spawn(async move {
-            loop {
-                match data_listener.accept().await {
-                    Ok((stream, address)) => {
-                        println!("New connection request from {}", &address);
-                        if !node_map.contains_key(&address.ip()) {
-                            let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
+        let mut listeners = Vec::with_capacity(self.ports.len());
+        for port in self.ports {
+            let data_listener = TcpListener::bind(SocketAddr::new(self.address, port)).await.unwrap();
+            let node_map = self.node_map.clone();
+            let output_clone = output_channel.clone();
+            let notifier = self.notifier.clone();
+            let listener = spawn_listener(notifier, data_listener, node_map, output_clone);
+            listeners.push(listener)
+        }
 
-                            let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                            node_map.insert(address.ip(), handle);
-                            let out = output_clone.clone();
-                            tokio::spawn(async move {
-                                start_new_bus(message_bus, input_channel, out.clone()).await;
-                            });
-                            self.notifier
-                                .send(ConnectionNotification { address })
-                                .await
-                                .expect("Unable to send!");
-                        }
+        // let data_listener = TcpListener::bind(self.address).await.unwrap();
+        // let node_map = self.node_map.clone();
+        // let output_clone = output_channel.clone();
 
-                        let handle = node_map.get(&address.ip()).expect("Not found!");
-                        handle
-                            .command_channel
-                            .send(MessageBusCommand::AddConnection(AddConnection {
-                                address,
-                                stream,
-                            }))
-                            .await
-                            .expect("TODO: panic message");
-                    }
-                    Err(_) => break,
-                }
-            }
-        });
+        // let notifier = self.notifier.clone();
+        // let listener = spawn_listener(notifier, data_listener, node_map, output_clone);
         let out_put_clone = output_channel.clone();
         loop {
             match self.command_channel.recv().await {
@@ -91,7 +74,8 @@ impl ConnectionManager {
                     match command {
                         NodeManagerCommand::Shutdown() => {
                             // TODO: graceful shutdown
-                            listener.abort();
+                            // listener.abort();
+                            listeners.iter().for_each(|listen| listen.abort());
                             break;
                         }
                         NodeManagerCommand::Connect(connect) => {
@@ -130,6 +114,49 @@ impl ConnectionManager {
             }
         }
     }
+}
+
+fn spawn_listener(
+    notifier: Sender<ConnectionNotification>,
+    data_listener: TcpListener,
+    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    output_channel: Sender<BytesMut>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match data_listener.accept().await {
+                Ok((stream, address)) => {
+                    println!("New connection request from {}", &address);
+                    if !node_map.contains_key(&address.ip()) {
+                        let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
+
+                        let (message_bus, handle) = MessageBus::new(send_to_bus);
+
+                        node_map.insert(address.ip(), handle);
+                        let out = output_channel.clone();
+                        tokio::spawn(async move {
+                            start_new_bus(message_bus, input_channel, out.clone()).await;
+                        });
+                        notifier
+                            .send(ConnectionNotification { address })
+                            .await
+                            .expect("Unable to send!");
+                    }
+
+                    let handle = node_map.get(&address.ip()).expect("Not found!");
+                    handle
+                        .command_channel
+                        .send(MessageBusCommand::AddConnection(AddConnection {
+                            address,
+                            stream,
+                        }))
+                        .await
+                        .expect("TODO: panic message");
+                }
+                Err(_) => break,
+            }
+        }
+    })
 }
 
 async fn start_new_bus(

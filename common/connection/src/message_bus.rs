@@ -76,6 +76,8 @@ impl WriteConnection {
     ) {
         tokio::spawn(async move {
             loop {
+                // println!("self: {}", self_address);
+                // println!("target: {}", target_address);
                 let mut buffer = input_channel.recv().await.expect("unable to receive!");
                 self.data_write_stream
                     .write_u32(buffer.len() as u32)

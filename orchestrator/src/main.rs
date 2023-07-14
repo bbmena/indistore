@@ -20,12 +20,13 @@ async fn main() -> io::Result<()> {
     println!("Hello from orchestrator!");
 
     let data_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
-    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+    let node_listener_address = IpAddr::from(Ipv4Addr::new(127, 0, 0, 1));
     let node_map = Arc::new(DashMap::new());
 
     // TODO ConnectionManager needs to be able to listen on multiple ports
+    let ports: Vec<u16> = vec![1338, 1339, 1340];
     let (node_manager, node_manager_handle) =
-        ConnectionManager::new(node_listener_address, node_map.clone());
+        ConnectionManager::new(node_listener_address, node_map.clone(), ports);
 
     let (to_router, for_router) = channel::<RouterRequestWrapper>(200_000);
     let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(1000);

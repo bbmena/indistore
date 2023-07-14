@@ -13,13 +13,14 @@ use tokio::io;
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
     let orchestrator_listener_address =
-        SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 2337);
+        IpAddr::from(Ipv4Addr::new(127, 0, 0, 1));
 
+    let ports: Vec<u16> = vec![2337, 2338, 2339];
     let node_map = Arc::new(DashMap::new());
     let node_map_clone = node_map.clone();
 
     let (orchestrator_manager, handle) =
-        ConnectionManager::new(orchestrator_listener_address, node_map);
+        ConnectionManager::new(orchestrator_listener_address, node_map, ports);
 
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
     // give from_node_to_router to the data store to answer requests
@@ -42,6 +43,24 @@ async fn main() -> io::Result<()> {
 
 async fn startup(handle: &ConnectionManagerHandle) {
     let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+    handle
+        .command_channel
+        .send(NodeManagerCommand::Connect(Connect {
+            address: node_listener_address,
+        }))
+        .await
+        .expect("");
+
+    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1339);
+    handle
+        .command_channel
+        .send(NodeManagerCommand::Connect(Connect {
+            address: node_listener_address,
+        }))
+        .await
+        .expect("");
+
+    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1340);
     handle
         .command_channel
         .send(NodeManagerCommand::Connect(Connect {
