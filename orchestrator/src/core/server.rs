@@ -20,10 +20,11 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use dashmap::DashMap;
-use tachyonix::{channel, Receiver, Sender};
+// use tachyonix::{channel, Receiver, Sender};
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use uuid::Uuid;
 
 use connection::messages::{
@@ -84,7 +85,7 @@ impl Server {
 
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => match command {
+                Some(command) => match command {
                     Command::Shutdown() => {
                         listener.abort();
                         for conn_handle in self.connections.iter() {
@@ -186,7 +187,7 @@ impl Connection {
 
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
+                Some(command) => {
                     match command {
                         Command::Shutdown() => {
                             // ReadConnection may be the one sending the Shutdown command, so check that it is open before trying to send
@@ -209,7 +210,7 @@ impl Connection {
                         }
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
         router_command_queue
@@ -255,7 +256,7 @@ impl WriteConnection {
     pub async fn write(mut self) {
         loop {
             match self.router_channel.recv().await {
-                Ok(mut buffer) => {
+                Some(mut buffer) => {
                     let _ = self.data_write_stream.write_u32(buffer.len() as u32);
                     self.data_write_stream
                         .write_buf(&mut buffer)
@@ -266,7 +267,7 @@ impl WriteConnection {
                         Err(_) => break,
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }

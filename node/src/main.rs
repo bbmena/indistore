@@ -7,8 +7,9 @@ use connection::messages::{Connect, NodeManagerCommand};
 use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tachyonix::channel;
+// use tachyonix::channel;
 use tokio::io;
+use tokio::sync::mpsc::channel;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {

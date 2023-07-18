@@ -1,8 +1,9 @@
 use bytes::BytesMut;
 use rkyv::{with::CopyOptimize, Archive, Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
-use tachyonix::Sender;
+// use tachyonix::Sender;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot::Sender as OneShotSender;
 use uuid::Uuid;
 
@@ -123,10 +124,12 @@ pub enum RouterCommand {
     Unsubscribe(ChannelUnsubscribe),
 }
 
+#[derive(Debug)]
 pub enum Command {
     Shutdown(),
 }
 
+#[derive(Debug)]
 pub enum MessageBusCommand {
     Shutdown(),
     AddConnection(AddConnection),
@@ -136,6 +139,7 @@ pub struct Connect {
     pub address: SocketAddr,
 }
 
+#[derive(Debug)]
 pub struct AddConnection {
     pub address: SocketAddr,
     pub stream: TcpStream,
@@ -147,20 +151,24 @@ pub struct OneShotMessage {
     pub response_channel: OneShotSender<BytesMut>,
 }
 
+#[derive(Debug)]
 pub struct ChannelSubscribe {
     pub channel_id: Uuid,
     pub response_channel: Sender<BytesMut>,
 }
 
+#[derive(Debug)]
 pub struct ChannelUnsubscribe {
     pub channel_id: Uuid,
 }
 
+#[derive(Debug)]
 pub struct RouterRequestWrapper {
     pub channel_id: Uuid,
     pub body: BytesMut,
 }
 
+#[derive(Debug)]
 pub struct ConnectionNotification {
     pub address: SocketAddr,
 }

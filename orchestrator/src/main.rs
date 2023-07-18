@@ -5,7 +5,7 @@ use connection::messages::{RouterCommand, RouterRequestWrapper};
 use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use tachyonix::channel;
+// use tachyonix::channel;
 use tokio::io;
 
 extern crate rmp_serde as rmps;
@@ -14,6 +14,7 @@ use crate::core::router::Router;
 use crate::core::server::Server;
 use connection::connection_manager::ConnectionManager;
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::channel;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {

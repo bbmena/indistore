@@ -8,8 +8,9 @@ use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
-use tachyonix::{channel, Receiver, Sender};
+// use tachyonix::{channel, Receiver, Sender};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
@@ -87,7 +88,7 @@ impl ConnectionManager {
         let out_put_clone = output_channel.clone();
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
+                Some(command) => {
                     match command {
                         NodeManagerCommand::Shutdown() => {
                             // TODO: graceful shutdown
@@ -126,7 +127,7 @@ impl ConnectionManager {
                         }
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }

@@ -2,12 +2,13 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use tachyonix::{channel, Receiver, Sender};
+// use tachyonix::{channel, Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
 use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::messages::{Command, MessageBusCommand};
 
@@ -93,11 +94,11 @@ impl WriteConnection {
             }
         });
         loop {
-            match self.command_channel.recv().await {
-                Ok(command) => match command {
+            match self.command_channel.recv().await{
+                Some(command) => match command {
                     Command::Shutdown() => {}
                 },
-                Err(_) => break,
+                None => break,
             }
         }
     }
@@ -166,17 +167,16 @@ impl ConnectionLane {
 
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => match command {
+                Some(command) => match command {
                     Command::Shutdown() => {
                         read_half_channel.send(Command::Shutdown()).await.expect("");
                         write_half_channel
                             .send(Command::Shutdown())
-                            .await
-                            .expect("Unable to send!");
+                            .await.expect("todo");
                         break;
                     }
                 },
-                Err(_) => break,
+                None => break,
             }
         }
     }
@@ -243,7 +243,7 @@ impl MessageBus {
 
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
+                Some(command) => {
                     match command {
                         MessageBusCommand::Shutdown() => {
                             // TODO these commands will currently be ignored. Need to be handled by receivers
@@ -267,7 +267,7 @@ impl MessageBus {
                         }
                     }
                 }
-                Err(_) => {}
+                None => {}
             }
         }
     }
@@ -288,8 +288,8 @@ impl MessageBusInput {
     pub async fn start(mut self) {
         loop {
             match self.input_channel.recv().await {
-                Ok(message) => self.worker.send(message).await.expect("unable to send!"),
-                Err(_) => break,
+                Some(message) => self.worker.send(message).await.expect("unable to send!"),
+                None => break,
             }
         }
     }
@@ -305,13 +305,13 @@ impl MessageBusOutput {
     pub async fn start(self, mut from_lanes: Receiver<BytesMut>) {
         loop {
             match from_lanes.recv().await {
-                Ok(message) => {
+                Some(message) => {
                     self.output_channel
                         .send(message)
                         .await
                         .expect("Unable to send!");
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }

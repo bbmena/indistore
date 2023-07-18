@@ -11,7 +11,8 @@ use rkyv::string::ArchivedString;
 use rkyv::Archived;
 use std::net::IpAddr;
 use std::sync::Arc;
-use tachyonix::{Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender};
+// use tachyonix::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
@@ -118,7 +119,7 @@ impl Router {
 
         loop {
             match self.command_queue.recv().await {
-                Ok(command) => match command {
+                Some(command) => match command {
                     RouterCommand::Shutdown() => {
                         self.shutdown(request_processor_handle, response_processor_handle)
                             .await;
@@ -134,7 +135,7 @@ impl Router {
                         self.remove_subscriber(unsub);
                     }
                 },
-                Err(_) => break,
+                None => break,
             }
         }
     }

@@ -8,7 +8,8 @@ use dashmap::DashMap;
 use rkyv::Archived;
 use std::net::IpAddr;
 use std::sync::Arc;
-use tachyonix::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{channel, Receiver, Sender};
+// use tachyonix::{channel, Receiver, Sender};
 
 pub struct DataStore {
     data: Arc<DashMap<String, BytesMut>>,
@@ -53,7 +54,7 @@ impl DataStore {
         println!("Ready to begin processing requests");
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
+                Some(command) => {
                     match command {
                         Command::Shutdown() => {
                             // TODO graceful shutdown
@@ -62,7 +63,7 @@ impl DataStore {
                         }
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }
@@ -160,13 +161,13 @@ impl DataStoreRequestHandler {
 
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
+                Some(command) => {
                     match command {
                         // TODO
                         Command::Shutdown() => break,
                     }
                 }
-                Err(_) => break,
+                None => break,
             }
         }
     }
