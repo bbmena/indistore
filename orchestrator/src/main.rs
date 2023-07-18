@@ -38,14 +38,15 @@ async fn main() -> io::Result<()> {
 
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
     let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(200_000);
-
+    let short_circuit_queue = to_router_from_node.clone();
     tokio::spawn(async move {
         node_manager.start(to_router_from_node).await;
     });
 
+
     tokio::spawn(async move {
         router
-            .route(for_router, from_node_to_router, node_manager_handle)
+            .route(for_router, from_node_to_router, node_manager_handle, short_circuit_queue)
             .await;
     });
 

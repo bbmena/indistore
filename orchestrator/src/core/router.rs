@@ -2,10 +2,7 @@ use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
 use connection::connection_manager::ConnectionManagerHandle;
 use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
-use connection::messages::{
-    ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
-    RouterCommand, RouterRequestWrapper,
-};
+use connection::messages::{ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, GetResponse, Request, Response, RouterCommand, RouterRequestWrapper};
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
 use rkyv::Archived;
@@ -15,6 +12,8 @@ use tachyonix::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+use crate::core::test_objects;
+
 
 pub struct Router {
     command_queue: Receiver<RouterCommand>,
@@ -70,6 +69,7 @@ impl Router {
         request_queue: Receiver<RouterRequestWrapper>,
         response_queue: Receiver<BytesMut>,
         mut connection_manager_handle: ConnectionManagerHandle,
+        short_circuit_queue: Sender<BytesMut>
     ) {
         let channel_map_ref = self.channel_map.clone();
         let message_to_channel_map_ref = self.message_to_channel_map.clone();
@@ -94,7 +94,7 @@ impl Router {
         };
 
         let request_processor_handle = tokio::spawn(async move {
-            request_processor.process().await;
+            request_processor.process(short_circuit_queue).await;
         });
         let response_processor_handle = tokio::spawn(async move {
             response_processor.process().await;
@@ -161,8 +161,11 @@ impl Router {
 }
 
 impl RequestQueueProcessor {
-    async fn process(&mut self) {
+    async fn process(&mut self, short_circuit_response: Sender<BytesMut>) {
+        let payload = connection::serialize(test_objects::create_small_object());
+
         loop {
+            let clone = payload.clone();
             let message = self.request_queue.recv().await.expect("Unable to read!");
             let buff = message.body;
             let message_archive: &Archived<Request> =
@@ -185,14 +188,28 @@ impl RequestQueueProcessor {
                             println!("Unable to find address!")
                         }
                         Some(addr) => {
-                            let response_channel =
-                                retrieve_response_channel(self.node_map.clone(), addr);
-                            response_channel.send(buff).await.expect("Unable to send!");
 
                             self.message_to_channel_map.insert(
-                                MessageId::new(request_id),
+                                MessageId::new(request_id.clone()),
                                 ChannelId::new(message.channel_id),
                             );
+
+                            let response = Response::GetResponse(GetResponse {
+                                id: request_id,
+                                key: key.as_str().into(),
+                                payload: clone,
+                            });
+                            let buff = rkyv::to_bytes::<_, 1024>(&response).expect("Can't serialize!");
+                            let bytes = BytesMut::from(&buff[..]);
+                            short_circuit_response.send(bytes).await.expect("unable to send");
+                            // let response_channel =
+                            //     retrieve_response_channel(self.node_map.clone(), addr);
+                            // response_channel.send(buff).await.expect("Unable to send!");
+                            //
+                            // self.message_to_channel_map.insert(
+                            //     MessageId::new(request_id),
+                            //     ChannelId::new(message.channel_id),
+                            // );
                         }
                     }
                 }
