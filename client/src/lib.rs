@@ -27,41 +27,46 @@ async fn read_loop(
     response_map: Arc<DashMap<Uuid, Sender<Response>>>,
 ) {
     loop {
-        let mut buff = Vec::with_capacity(5024000);
-        match data_read_stream.read_buf(&mut buff).await {
-            Ok(usize) => {
-                if usize > 0 {
-                    let message_archive: &Archived<Response> =
-                        rkyv::check_archived_root::<Response>(&buff[..]).unwrap();
+        match data_read_stream.read_u32().await {
+            Ok(message_size) => {
+                let mut vec = vec![0; message_size as usize];
+                match data_read_stream.read_exact(&mut vec).await {
+                    Ok(_) => {
+                        let message_archive: &Archived<Response> =
+                            rkyv::check_archived_root::<Response>(&vec).unwrap();
 
-                    match message_archive {
-                        ArchivedResponse::GetResponse(get) => {
-                            let resp: GetResponse = get.deserialize(&mut rkyv::Infallible).unwrap();
-                            let sender = { response_map.remove(&resp.id).expect("Not found!") };
-                            sender
-                                .1
-                                .send(Response::GetResponse(resp))
-                                .expect("It Broke");
-                        }
-                        ArchivedResponse::PutResponse(put) => {
-                            let resp: PutResponse = put.deserialize(&mut rkyv::Infallible).unwrap();
-                            let sender = { response_map.remove(&resp.id).expect("Not found!") };
-                            sender
-                                .1
-                                .send(Response::PutResponse(resp))
-                                .expect("It Broke");
-                        }
-                        ArchivedResponse::InvalidResponse(invalid) => {
-                            let resp: InvalidResponse =
-                                invalid.deserialize(&mut rkyv::Infallible).unwrap();
-                            let sender = { response_map.remove(&resp.id).expect("Not found!") };
-                            sender
-                                .1
-                                .send(Response::InvalidResponse(resp))
-                                .expect("It Broke");
-                        }
-                        _ => (),
-                    };
+                        match message_archive {
+                            ArchivedResponse::GetResponse(get) => {
+                                let resp: GetResponse =
+                                    get.deserialize(&mut rkyv::Infallible).unwrap();
+                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                sender
+                                    .1
+                                    .send(Response::GetResponse(resp))
+                                    .expect("It Broke");
+                            }
+                            ArchivedResponse::PutResponse(put) => {
+                                let resp: PutResponse =
+                                    put.deserialize(&mut rkyv::Infallible).unwrap();
+                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                sender
+                                    .1
+                                    .send(Response::PutResponse(resp))
+                                    .expect("It Broke");
+                            }
+                            ArchivedResponse::InvalidResponse(invalid) => {
+                                let resp: InvalidResponse =
+                                    invalid.deserialize(&mut rkyv::Infallible).unwrap();
+                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                sender
+                                    .1
+                                    .send(Response::InvalidResponse(resp))
+                                    .expect("It Broke");
+                            }
+                            _ => (),
+                        };
+                    }
+                    Err(_) => break,
                 }
             }
             Err(e) => {

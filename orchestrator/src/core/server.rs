@@ -256,7 +256,10 @@ impl WriteConnection {
         loop {
             match self.router_channel.recv().await {
                 Ok(mut buffer) => {
-                    let _ = self.data_write_stream.write_u32(buffer.len() as u32);
+                    self.data_write_stream
+                        .write_u32(buffer.len() as u32)
+                        .await
+                        .expect("Unable to write!");
                     self.data_write_stream
                         .write_buf(&mut buffer)
                         .await
