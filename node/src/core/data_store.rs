@@ -72,7 +72,7 @@ pub struct DataStoreRequestHandler {
     command_channel: Receiver<Command>,
 }
 
-fn handle_get(
+fn handle_get_request(
     request: &ArchivedGetRequest,
     data: Arc<DashMap<String, BytesMut>>,
 ) -> Option<Response> {
@@ -89,7 +89,7 @@ fn handle_get(
     }
 }
 
-fn handle_put(
+fn handle_put_request(
     request: &ArchivedPutRequest,
     data: Arc<DashMap<String, BytesMut>>,
 ) -> Option<Response> {
@@ -103,23 +103,13 @@ fn handle_put(
 }
 
 // Basically just an ack at this point
-fn handle_delete(
+fn handle_delete_request(
     request: &ArchivedDeleteRequest,
     data: Arc<DashMap<String, BytesMut>>,
 ) -> Option<Response> {
     data.remove(&request.key.to_string());
     Some(Response::DeleteResponse())
 }
-
-// fn retrieve_response_channel(
-//     channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-//     origination_address: IpAddr,
-// ) -> Sender<BytesMut> {
-//     let response_channel = channel_map
-//         .get(&origination_address)
-//         .expect("Channel not found");
-//     response_channel.send_to_bus.clone()
-// }
 
 impl DataStoreRequestHandler {
     pub async fn start(
@@ -138,9 +128,9 @@ impl DataStoreRequestHandler {
 
                 // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
                 let response = match message_archive {
-                    ArchivedRequest::Get(request) => handle_get(request, data.clone()),
-                    ArchivedRequest::Put(request) => handle_put(request, data.clone()),
-                    ArchivedRequest::Delete(request) => handle_delete(request, data.clone()),
+                    ArchivedRequest::Get(request) => handle_get_request(request, data.clone()),
+                    ArchivedRequest::Put(request) => handle_put_request(request, data.clone()),
+                    ArchivedRequest::Delete(request) => handle_delete_request(request, data.clone()),
                 };
 
                 match response {
@@ -149,10 +139,20 @@ impl DataStoreRequestHandler {
                         let buff = rkyv::to_bytes::<_, 2048>(&resp).expect("Can't serialize!");
                         let bytes = BytesMut::from(&buff[..]);
                         // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
-                        let mut response_channel =
-                            retrieve_response_channel(channel_map.clone(), origination_address);
-                        response_channel.send(bytes).await.expect("Unable to send!");
-                        drop(response_channel);
+                        match retrieve_response_channel(
+                            channel_map.clone(),
+                            origination_address.clone(),
+                        ) {
+                            None => {
+                                println!(
+                                    "Response Channel for address {} not found",
+                                    origination_address
+                                )
+                            }
+                            Some(response_channel) => {
+                                response_channel.send(bytes).await.expect("Unable to send!");
+                            }
+                        };
                     }
                 }
             }
