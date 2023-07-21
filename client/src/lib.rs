@@ -19,8 +19,18 @@ use connection::messages::{
 };
 use connection::{deserialize, serialize};
 
-use rkyv::Archived;
+use rkyv::{AlignedVec, Archived};
 use rkyv::Deserialize as des;
+
+// Access to DashMap must be done from a synchronous function
+fn response_map_insert(response_map: Arc<DashMap<Uuid, Sender<Response>>>, key: Uuid, value: Sender<Response>) {
+    response_map.insert(key, value);
+}
+
+// Access to DashMap must be done from a synchronous function
+fn response_map_remove(response_map: Arc<DashMap<Uuid, Sender<Response>>>, key: &Uuid) -> Option<(Uuid, Sender<Response>)> {
+    response_map.remove(key)
+}
 
 async fn read_loop(
     mut data_read_stream: BufReader<ReadHalf<TcpStream>>,
@@ -39,29 +49,26 @@ async fn read_loop(
                             ArchivedResponse::GetResponse(get) => {
                                 let resp: GetResponse =
                                     get.deserialize(&mut rkyv::Infallible).unwrap();
-                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                let (_, sender) = response_map_remove(response_map.clone(),&resp.id).expect("Key not found!");
                                 sender
-                                    .1
                                     .send(Response::GetResponse(resp))
-                                    .expect("It Broke");
+                                    .expect("Unable to send response!");
                             }
                             ArchivedResponse::PutResponse(put) => {
                                 let resp: PutResponse =
                                     put.deserialize(&mut rkyv::Infallible).unwrap();
-                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                let (_, sender) = response_map_remove(response_map.clone(),&resp.id).expect("Key not found!");
                                 sender
-                                    .1
                                     .send(Response::PutResponse(resp))
-                                    .expect("It Broke");
+                                    .expect("Unable to send response!");
                             }
                             ArchivedResponse::InvalidResponse(invalid) => {
                                 let resp: InvalidResponse =
                                     invalid.deserialize(&mut rkyv::Infallible).unwrap();
-                                let sender = { response_map.remove(&resp.id).expect("Not found!") };
+                                let (_, sender) = response_map_remove(response_map.clone(),&resp.id).expect("Key not found!");
                                 sender
-                                    .1
                                     .send(Response::InvalidResponse(resp))
-                                    .expect("It Broke");
+                                    .expect("Unable to send response!");
                             }
                             _ => (),
                         };
@@ -119,7 +126,6 @@ impl Client {
     where
         T: serde::ser::Serialize,
     {
-        let now = Instant::now();
         let req_id = Uuid::new_v4();
         let payload = serialize(val);
         let request = Request::Put(PutRequest {
@@ -130,28 +136,14 @@ impl Client {
         });
         let mut buff = rkyv::to_bytes::<_, 2048>(&request).unwrap();
         let (sender, receiver) = oneshot::channel::<Response>();
-        {
-            self.response_map.insert(req_id, sender);
-        }
+        response_map_insert(self.response_map.clone(), req_id, sender);
 
-        self.data_write_stream
-            .write_u32(buff.len() as u32)
-            .await
-            .expect("");
-        self.data_write_stream
-            .write_all(&buff)
-            .await
-            .expect("Unable to write to data stream!");
-        self.data_write_stream
-            .flush()
-            .await
-            .expect("Unable to flush data stream!");
+        self.write_to_stream(buff).await;
 
-        let buff: Vec<u8> = match receiver.await.expect("Receiver Error!") {
-            Response::GetResponse(_) => Vec::new(),
-            Response::PutResponse(_) => Vec::new(),
-            Response::DeleteResponse() => Vec::new(),
-            Response::InvalidResponse(_) => Vec::new(),
+        let _ = match receiver.await.expect("Receiver Error!") {
+            Response::PutResponse(_) => {},
+            Response::InvalidResponse(_) => {},
+            _ => { println!("Unsupported response type") }
         };
     }
 
@@ -159,7 +151,6 @@ impl Client {
     where
         T: for<'a> Deserialize<'a>,
     {
-        let now = Instant::now();
         let req_id = Uuid::new_v4();
         let request = Request::Get(GetRequest {
             id: req_id.clone(),
@@ -168,30 +159,31 @@ impl Client {
         });
         let buff = rkyv::to_bytes::<_, 2048>(&request).expect("Can't serialize!");
         let (sender, receiver) = oneshot::channel::<Response>();
-        {
-            self.response_map.insert(req_id, sender);
-        }
+        response_map_insert(self.response_map.clone(), req_id, sender);
 
+        self.write_to_stream(buff).await;
+
+        let buff = match receiver.await.expect("Receiver Error!") {
+            Response::GetResponse(resp) => resp.payload,
+            Response::InvalidResponse(_) => Vec::new(),
+            _ => { Vec::new() }
+        };
+        deserialize(buff)
+    }
+
+    #[inline(always)]
+    async fn write_to_stream(&mut self, buff: AlignedVec) {
         self.data_write_stream
             .write_u32(buff.len() as u32)
             .await
-            .expect("");
-
+            .expect("Unable to write length to data stream!");
         self.data_write_stream
             .write_all(&buff)
             .await
-            .expect("Unable to write to data stream!");
+            .expect("Unable to write buffer to data stream!");
         self.data_write_stream
             .flush()
             .await
             .expect("Unable to flush data stream!");
-
-        let buff = match receiver.await.expect("Receiver Error!") {
-            Response::GetResponse(resp) => resp.payload,
-            Response::PutResponse(_) => Vec::new(),
-            Response::DeleteResponse() => Vec::new(),
-            Response::InvalidResponse(_) => Vec::new(),
-        };
-        deserialize(buff)
     }
 }
