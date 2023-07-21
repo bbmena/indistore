@@ -235,6 +235,7 @@ impl ResponseQueueProcessor {
                         Some(channel_id) => {
                             match channel_map_lookup(self.channel_map.clone(), channel_id) {
                                 None => {
+                                    //TODO client is left waiting when this error occurs. Need to send an error back to the client
                                     println!("Channel ID not found!")
                                 }
                                 Some(sender) => {
@@ -259,7 +260,7 @@ fn message_channel_lookup(
 ) -> Option<ChannelId> {
     match message_to_channel_map.remove(&message_id) {
         None => None,
-        Some(entry) => Some(entry.value()),
+        Some((_, channel_id)) => Some(channel_id),
     }
 }
 
