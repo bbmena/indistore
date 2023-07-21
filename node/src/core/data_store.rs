@@ -146,7 +146,7 @@ impl DataStoreRequestHandler {
                 match response {
                     None => {}
                     Some(resp) => {
-                        let buff = rkyv::to_bytes::<_, 1024>(&resp).expect("Can't serialize!");
+                        let buff = rkyv::to_bytes::<_, 2048>(&resp).expect("Can't serialize!");
                         let bytes = BytesMut::from(&buff[..]);
                         // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
                         let mut response_channel =

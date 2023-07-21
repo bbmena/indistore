@@ -128,7 +128,7 @@ impl Client {
             key,
             payload,
         });
-        let mut buff = rkyv::to_bytes::<_, 1000000>(&request).unwrap();
+        let mut buff = rkyv::to_bytes::<_, 2048>(&request).unwrap();
         let (sender, receiver) = oneshot::channel::<Response>();
         {
             self.response_map.insert(req_id, sender);
@@ -166,7 +166,7 @@ impl Client {
             request_origin: self.current_orchestrator.ip(),
             key,
         });
-        let buff = rkyv::to_bytes::<_, 1024000>(&request).expect("Can't serialize!");
+        let buff = rkyv::to_bytes::<_, 2048>(&request).expect("Can't serialize!");
         let (sender, receiver) = oneshot::channel::<Response>();
         {
             self.response_map.insert(req_id, sender);
