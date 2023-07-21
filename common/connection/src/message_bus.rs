@@ -8,6 +8,7 @@ use tokio::net::TcpStream;
 
 use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
+use dashmap::mapref::one::Ref;
 
 use crate::messages::{Command, MessageBusCommand};
 
@@ -321,9 +322,9 @@ impl MessageBusOutput {
 pub fn retrieve_response_channel(
     channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     origination_address: IpAddr,
-) -> Sender<BytesMut> {
-    let response_channel = channel_map
-        .get(&origination_address)
-        .expect("Channel not found");
-    response_channel.send_to_bus.clone()
+) -> Option<Sender<BytesMut>> {
+    match channel_map.get(&origination_address) {
+        None => None,
+        Some(response_channel) => Some(response_channel.send_to_bus.clone()),
+    }
 }
