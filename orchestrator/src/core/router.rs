@@ -6,6 +6,7 @@ use connection::messages::{
     ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
     RouterCommand, RouterRequestWrapper,
 };
+use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
 use rkyv::Archived;
@@ -173,31 +174,37 @@ impl RequestQueueProcessor {
                 ArchivedRequest::Delete(request) => Some((&request.key, &request.id)),
             };
             match routing_info {
+                None => {
+                    println!("Invalid message type received")
+                }
                 Some((key, req_id)) => {
                     let request_id = req_id.clone();
-                    match self
+                    let key_owner = self
                         .hash_ring
                         .lock()
                         .await
                         .find_key_owner(key.as_str().into())
-                    {
+                        .clone();
+                    match key_owner {
                         None => {
                             println!("Unable to find address!")
                         }
                         Some(addr) => {
-                            let response_channel =
-                                retrieve_response_channel(self.node_map.clone(), addr);
-                            response_channel.send(buff).await.expect("Unable to send!");
-
-                            self.message_to_channel_map.insert(
+                            match retrieve_response_channel(self.node_map.clone(), addr.clone()) {
+                                None => {
+                                    println!("Response Channel for address {} not found", addr)
+                                }
+                                Some(response_channel) => {
+                                    response_channel.send(buff).await.expect("Unable to send!");
+                                }
+                            }
+                            message_channel_insert(
+                                self.message_to_channel_map.clone(),
                                 MessageId::new(request_id),
                                 ChannelId::new(message.channel_id),
                             );
                         }
                     }
-                }
-                None => {
-                    println!("Invalid message type received")
                 }
             }
         }
@@ -218,18 +225,24 @@ impl ResponseQueueProcessor {
             };
             match routing_info {
                 Some((_, response_id)) => {
-                    let channel_id = self
-                        .message_to_channel_map
-                        .get(&MessageId::new(response_id.clone()))
-                        .expect("Message ID not found!");
-                    let sender = {
-                        self.channel_map
-                            .get(channel_id.value())
-                            .expect("Channel ID not found!")
-                            .value()
-                            .clone()
-                    };
-                    sender.send(buff).await.expect("TODO: panic message");
+                    match message_channel_lookup(
+                        self.message_to_channel_map.clone(),
+                        MessageId::new(response_id.clone()),
+                    ) {
+                        None => {
+                            println!("Message ID not found!")
+                        }
+                        Some(channel_id) => {
+                            match channel_map_lookup(self.channel_map.clone(), channel_id) {
+                                None => {
+                                    println!("Channel ID not found!")
+                                }
+                                Some(sender) => {
+                                    sender.send(buff).await.expect("Unable to send response!");
+                                }
+                            }
+                        }
+                    }
                 }
                 None => {
                     println!("Invalid message type received")
@@ -239,8 +252,39 @@ impl ResponseQueueProcessor {
     }
 }
 
+// Access to DashMap must be done from a synchronous function
+fn message_channel_lookup(
+    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
+    message_id: MessageId,
+) -> Option<ChannelId> {
+    match message_to_channel_map.remove(&message_id) {
+        None => None,
+        Some(entry) => Some(entry.value()),
+    }
+}
+
+// Access to DashMap must be done from a synchronous function
+fn message_channel_insert(
+    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
+    message_id: MessageId,
+    channel_id: ChannelId,
+) {
+    message_to_channel_map.insert(message_id, channel_id);
+}
+
+// Access to DashMap must be done from a synchronous function
+fn channel_map_lookup(
+    channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
+    channel_id: ChannelId,
+) -> Option<Sender<BytesMut>> {
+    match channel_map.get(&channel_id) {
+        None => None,
+        Some(entry) => Some(entry.value().clone()),
+    }
+}
+
 // Simple wrapper for a UUID to define what is being identified
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 struct ChannelId {
     id: Uuid,
 }
@@ -250,7 +294,7 @@ impl ChannelId {
     }
 }
 // Simple wrapper for a UUID to define what is being identified
-#[derive(Eq, PartialEq, Hash)]
+#[derive(Eq, PartialEq, Hash, Clone)]
 struct MessageId {
     id: Uuid,
 }
