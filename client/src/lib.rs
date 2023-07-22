@@ -21,15 +21,8 @@ use connection::{deserialize, serialize};
 
 use rkyv::Deserialize as des;
 use rkyv::{AlignedVec, Archived};
+use util::map_access_wrapper::arc_map_insert;
 
-// Access to DashMap must be done from a synchronous function
-fn response_map_insert(
-    response_map: Arc<DashMap<Uuid, Sender<Response>>>,
-    key: Uuid,
-    value: Sender<Response>,
-) {
-    response_map.insert(key, value);
-}
 
 // Access to DashMap must be done from a synchronous function
 fn response_map_remove(
@@ -149,7 +142,7 @@ impl Client {
         });
         let mut buff = rkyv::to_bytes::<_, 2048>(&request).unwrap();
         let (sender, receiver) = oneshot::channel::<Response>();
-        response_map_insert(self.response_map.clone(), req_id, sender);
+        arc_map_insert(self.response_map.clone(), req_id, sender);
 
         self.write_to_stream(buff).await;
 
@@ -174,7 +167,7 @@ impl Client {
         });
         let buff = rkyv::to_bytes::<_, 2048>(&request).expect("Can't serialize!");
         let (sender, receiver) = oneshot::channel::<Response>();
-        response_map_insert(self.response_map.clone(), req_id, sender);
+        arc_map_insert(self.response_map.clone(), req_id, sender);
 
         self.write_to_stream(buff).await;
 

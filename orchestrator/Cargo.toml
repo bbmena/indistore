@@ -18,4 +18,5 @@ sha3 = { workspace=true }
 dashmap = { workspace=true }
 
 connection = { path="../common/connection" }
+util = { path="../common/util" }
 serde = { workspace=true }

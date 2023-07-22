@@ -9,6 +9,7 @@ use std::{
 use dashmap::mapref::one::Ref;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::net::{TcpListener, TcpStream};
+use util::map_access_wrapper::arc_map_insert;
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
@@ -20,11 +21,6 @@ pub struct ConnectionManager {
 pub struct ConnectionManagerHandle {
     pub command_channel: Sender<NodeManagerCommand>,
     pub notification_receiver: Receiver<ConnectionNotification>,
-}
-
-// Access to DashMap must be done from a synchronous function
-fn node_map_insert(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: IpAddr, val: MessageBusHandle) {
-    node_map.insert(key, val);
 }
 
 // Access to DashMap must be done from a synchronous function
@@ -78,7 +74,7 @@ impl ConnectionManager {
 
                             let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                            node_map_insert(node_map.clone(), address.ip(), handle);
+                            arc_map_insert(node_map.clone(), address.ip(), handle);
                             let out = output_clone.clone();
                             tokio::spawn(async move {
                                 start_new_bus(message_bus, input_channel, out.clone()).await;
@@ -126,7 +122,7 @@ impl ConnectionManager {
 
                                 let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                                node_map_insert(self.node_map.clone(), address.ip(), handle);
+                                arc_map_insert(self.node_map.clone(), address.ip(), handle);
                                 let out = out_put_clone.clone();
                                 tokio::spawn(async move {
                                     start_new_bus(message_bus, input_channel, out.clone()).await;

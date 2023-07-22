@@ -16,6 +16,7 @@ use tachyonix::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
+use util::map_access_wrapper::arc_map_insert;
 
 pub struct Router {
     command_queue: Receiver<RouterCommand>,
@@ -198,7 +199,7 @@ impl RequestQueueProcessor {
                                     response_channel.send(buff).await.expect("Unable to send!");
                                 }
                             }
-                            message_channel_insert(
+                            arc_map_insert(
                                 self.message_to_channel_map.clone(),
                                 MessageId::new(request_id),
                                 ChannelId::new(message.channel_id),
@@ -262,15 +263,6 @@ fn message_channel_lookup(
         None => None,
         Some((_, channel_id)) => Some(channel_id),
     }
-}
-
-// Access to DashMap must be done from a synchronous function
-fn message_channel_insert(
-    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
-    message_id: MessageId,
-    channel_id: ChannelId,
-) {
-    message_to_channel_map.insert(message_id, channel_id);
 }
 
 // Access to DashMap must be done from a synchronous function

@@ -29,6 +29,7 @@ use uuid::Uuid;
 use connection::messages::{
     ChannelSubscribe, ChannelUnsubscribe, Command, RouterCommand, RouterRequestWrapper,
 };
+use util::map_access_wrapper::arc_map_insert;
 
 pub struct ServerHandle {
     command_channel: Sender<Command>,
@@ -72,7 +73,7 @@ impl Server {
                         let (connection, connection_handle) = Connection::new();
                         let self_sender = connection_handle.command_channel.clone();
                         // TODO this ref needs to be removed when the connection gets closed
-                        connections_ref.insert(connection.channel_id, connection_handle);
+                        arc_map_insert(connections_ref.clone(), connection.channel_id, connection_handle);
                         tokio::spawn(async move {
                             connection.start(stream, r_c, r_c_q, self_sender).await;
                         });

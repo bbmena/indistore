@@ -3,7 +3,8 @@ members = [
     "node",
     "orchestrator",
     "common/connection",
-    "client"
+    "common/util",
+    "client",
 ]
 
 [workspace.dependencies]

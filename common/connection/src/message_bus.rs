@@ -9,6 +9,7 @@ use tokio::net::TcpStream;
 use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
 use dashmap::mapref::one::Ref;
+use util::map_access_wrapper::map_insert;
 
 use crate::messages::{Command, MessageBusCommand};
 
@@ -260,7 +261,7 @@ impl MessageBus {
                         MessageBusCommand::AddConnection(connection) => {
                             let stealer_clone = stealer.clone();
                             let (lane, handle) = ConnectionLane::new(connection.address.port());
-                            self.connections.insert(connection.address, handle);
+                            map_insert(self.connections.clone(), connection.address, handle);
                             let sender = lane_sender.clone();
                             tokio::spawn(async move {
                                 lane.start(stealer_clone, sender, connection.stream).await
