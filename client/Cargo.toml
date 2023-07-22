@@ -17,3 +17,4 @@ rkyv = { workspace=true }
 dashmap = { workspace=true }
 
 connection = { path="../common/connection" }
+util = { path="../common/util" }
