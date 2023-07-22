@@ -1,13 +1,12 @@
 use crate::message_bus::{MessageBus, MessageBusHandle};
-use crate::messages::{
-    AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand,
-};
+use crate::messages::{AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand};
 use bytes::BytesMut;
 use dashmap::DashMap;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
+use dashmap::mapref::one::Ref;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -21,6 +20,26 @@ pub struct ConnectionManager {
 pub struct ConnectionManagerHandle {
     pub command_channel: Sender<NodeManagerCommand>,
     pub notification_receiver: Receiver<ConnectionNotification>,
+}
+
+// Access to DashMap must be done from a synchronous function
+fn node_map_insert(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: IpAddr, val: MessageBusHandle) {
+    node_map.insert(key, val);
+}
+
+// Access to DashMap must be done from a synchronous function
+fn node_map_contains_key(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: &IpAddr) -> bool {
+    node_map.contains_key(key)
+}
+
+// Access to DashMap must be done from a synchronous function
+fn fetch_command_channel(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: &IpAddr) -> Option<Sender<MessageBusCommand>> {
+    match node_map.get(key) {
+        None => None,
+        Some(entry) => {
+            Some(entry.command_channel.clone())
+        }
+    }
 }
 
 impl ConnectionManager {
@@ -54,12 +73,12 @@ impl ConnectionManager {
                 match data_listener.accept().await {
                     Ok((stream, address)) => {
                         println!("New connection request from {}", &address);
-                        if !node_map.contains_key(&address.ip()) {
+                        if !node_map_contains_key(node_map.clone(), &address.ip()) {
                             let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                             let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                            node_map.insert(address.ip(), handle);
+                            node_map_insert(node_map.clone(), address.ip(), handle);
                             let out = output_clone.clone();
                             tokio::spawn(async move {
                                 start_new_bus(message_bus, input_channel, out.clone()).await;
@@ -70,15 +89,18 @@ impl ConnectionManager {
                                 .expect("Unable to send!");
                         }
 
-                        let handle = node_map.get(&address.ip()).expect("Not found!");
-                        handle
-                            .command_channel
-                            .send(MessageBusCommand::AddConnection(AddConnection {
-                                address,
-                                stream,
-                            }))
-                            .await
-                            .expect("TODO: panic message");
+                        match fetch_command_channel(node_map.clone(), &address.ip) {
+                            None => { println!("Connection not found!") }
+                            Some(command_channel) => {
+                                command_channel
+                                    .send(MessageBusCommand::AddConnection(AddConnection {
+                                        address,
+                                        stream,
+                                    }))
+                                    .await
+                                    .expect("Unable to send AddConnection command!");
+                            }
+                        }
                     }
                     Err(_) => break,
                 }
@@ -99,30 +121,30 @@ impl ConnectionManager {
                             let stream = TcpStream::connect(connect.address)
                                 .await
                                 .expect("Unable to connect!");
-                            if !self.node_map.contains_key(&connect.address.ip()) {
+                            if !node_map_contains_key(self.node_map.clone(), &connect.address.ip()) {
                                 let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                                 let (message_bus, handle) = MessageBus::new(send_to_bus);
 
-                                self.node_map.insert(connect.address.ip(), handle);
+                                node_map_insert(self.node_map.clone(), address.ip(), handle);
                                 let out = out_put_clone.clone();
                                 tokio::spawn(async move {
                                     start_new_bus(message_bus, input_channel, out.clone()).await;
                                 });
                             }
 
-                            let handle = self
-                                .node_map
-                                .get(&connect.address.ip())
-                                .expect("Not found!");
-                            handle
-                                .command_channel
-                                .send(MessageBusCommand::AddConnection(AddConnection {
-                                    address: connect.address,
-                                    stream,
-                                }))
-                                .await
-                                .expect("TODO: panic message");
+                            match fetch_command_channel(self.node_map.clone(), &address.ip) {
+                                None => { println!("Connection not found!") }
+                                Some(command_channel) => {
+                                    command_channel
+                                        .send(MessageBusCommand::AddConnection(AddConnection {
+                                            address: connect.address,
+                                            stream,
+                                        }))
+                                        .await
+                                        .expect("Unable to send AddConnection command!");
+                                }
+                            }
                         }
                     }
                 }
