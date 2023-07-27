@@ -1,15 +1,17 @@
-use crate::message_bus::{MessageBus, MessageBusHandle};
-use crate::messages::{AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand};
+use crate::message_bus::{retrieve_command_channel, MessageBus, MessageBusHandle};
+use crate::messages::{
+    AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand,
+};
 use bytes::BytesMut;
+use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use std::{
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
-use dashmap::mapref::one::Ref;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::net::{TcpListener, TcpStream};
-use util::map_access_wrapper::arc_map_insert;
+use util::map_access_wrapper::{arc_map_contains_key, arc_map_insert};
 
 pub struct ConnectionManager {
     command_channel: Receiver<NodeManagerCommand>,
@@ -21,21 +23,6 @@ pub struct ConnectionManager {
 pub struct ConnectionManagerHandle {
     pub command_channel: Sender<NodeManagerCommand>,
     pub notification_receiver: Receiver<ConnectionNotification>,
-}
-
-// Access to DashMap must be done from a synchronous function
-fn node_map_contains_key(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: &IpAddr) -> bool {
-    node_map.contains_key(key)
-}
-
-// Access to DashMap must be done from a synchronous function
-fn fetch_command_channel(node_map: Arc<DashMap<IpAddr, MessageBusHandle>>, key: &IpAddr) -> Option<Sender<MessageBusCommand>> {
-    match node_map.get(key) {
-        None => None,
-        Some(entry) => {
-            Some(entry.command_channel.clone())
-        }
-    }
 }
 
 impl ConnectionManager {
@@ -69,7 +56,7 @@ impl ConnectionManager {
                 match data_listener.accept().await {
                     Ok((stream, address)) => {
                         println!("New connection request from {}", &address);
-                        if !node_map_contains_key(node_map.clone(), &address.ip()) {
+                        if !arc_map_contains_key(node_map.clone(), &address.ip()) {
                             let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                             let (message_bus, handle) = MessageBus::new(send_to_bus);
@@ -85,8 +72,10 @@ impl ConnectionManager {
                                 .expect("Unable to send!");
                         }
 
-                        match fetch_command_channel(node_map.clone(), &address.ip()) {
-                            None => { println!("Connection not found!") }
+                        match retrieve_command_channel(node_map.clone(), &address.ip()) {
+                            None => {
+                                println!("Connection not found!")
+                            }
                             Some(command_channel) => {
                                 command_channel
                                     .send(MessageBusCommand::AddConnection(AddConnection {
@@ -117,7 +106,7 @@ impl ConnectionManager {
                             let stream = TcpStream::connect(connect.address)
                                 .await
                                 .expect("Unable to connect!");
-                            if !node_map_contains_key(self.node_map.clone(), &connect.address.ip()) {
+                            if !arc_map_contains_key(self.node_map.clone(), &connect.address.ip()) {
                                 let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
                                 let (message_bus, handle) = MessageBus::new(send_to_bus);
@@ -129,8 +118,13 @@ impl ConnectionManager {
                                 });
                             }
 
-                            match fetch_command_channel(self.node_map.clone(), &self.address.ip()) {
-                                None => { println!("Connection not found!") }
+                            match retrieve_command_channel(
+                                self.node_map.clone(),
+                                &self.address.ip(),
+                            ) {
+                                None => {
+                                    println!("Connection not found!")
+                                }
                                 Some(command_channel) => {
                                     command_channel
                                         .send(MessageBusCommand::AddConnection(AddConnection {

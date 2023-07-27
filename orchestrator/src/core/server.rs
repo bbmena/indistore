@@ -73,7 +73,11 @@ impl Server {
                         let (connection, connection_handle) = Connection::new();
                         let self_sender = connection_handle.command_channel.clone();
                         // TODO this ref needs to be removed when the connection gets closed
-                        arc_map_insert(connections_ref.clone(), connection.channel_id, connection_handle);
+                        arc_map_insert(
+                            connections_ref.clone(),
+                            connection.channel_id,
+                            connection_handle,
+                        );
                         tokio::spawn(async move {
                             connection.start(stream, r_c, r_c_q, self_sender).await;
                         });

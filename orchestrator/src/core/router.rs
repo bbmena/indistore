@@ -15,8 +15,8 @@ use std::sync::Arc;
 use tachyonix::{Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 use util::map_access_wrapper::arc_map_insert;
+use uuid::Uuid;
 
 pub struct Router {
     command_queue: Receiver<RouterCommand>,

@@ -21,16 +21,7 @@ use connection::{deserialize, serialize};
 
 use rkyv::Deserialize as des;
 use rkyv::{AlignedVec, Archived};
-use util::map_access_wrapper::arc_map_insert;
-
-
-// Access to DashMap must be done from a synchronous function
-fn response_map_remove(
-    response_map: Arc<DashMap<Uuid, Sender<Response>>>,
-    key: &Uuid,
-) -> Option<(Uuid, Sender<Response>)> {
-    response_map.remove(key)
-}
+use util::map_access_wrapper::{arc_map_insert, arc_map_remove};
 
 async fn read_loop(
     mut data_read_stream: BufReader<ReadHalf<TcpStream>>,
@@ -49,9 +40,8 @@ async fn read_loop(
                             ArchivedResponse::GetResponse(get) => {
                                 let resp: GetResponse =
                                     get.deserialize(&mut rkyv::Infallible).unwrap();
-                                let (_, sender) =
-                                    response_map_remove(response_map.clone(), &resp.id)
-                                        .expect("Key not found!");
+                                let (_, sender) = arc_map_remove(response_map.clone(), &resp.id)
+                                    .expect("Key not found!");
                                 sender
                                     .send(Response::GetResponse(resp))
                                     .expect("Unable to send response!");
@@ -59,9 +49,8 @@ async fn read_loop(
                             ArchivedResponse::PutResponse(put) => {
                                 let resp: PutResponse =
                                     put.deserialize(&mut rkyv::Infallible).unwrap();
-                                let (_, sender) =
-                                    response_map_remove(response_map.clone(), &resp.id)
-                                        .expect("Key not found!");
+                                let (_, sender) = arc_map_remove(response_map.clone(), &resp.id)
+                                    .expect("Key not found!");
                                 sender
                                     .send(Response::PutResponse(resp))
                                     .expect("Unable to send response!");
@@ -69,9 +58,8 @@ async fn read_loop(
                             ArchivedResponse::InvalidResponse(invalid) => {
                                 let resp: InvalidResponse =
                                     invalid.deserialize(&mut rkyv::Infallible).unwrap();
-                                let (_, sender) =
-                                    response_map_remove(response_map.clone(), &resp.id)
-                                        .expect("Key not found!");
+                                let (_, sender) = arc_map_remove(response_map.clone(), &resp.id)
+                                    .expect("Key not found!");
                                 sender
                                     .send(Response::InvalidResponse(resp))
                                     .expect("Unable to send response!");

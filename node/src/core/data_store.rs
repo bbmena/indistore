@@ -130,7 +130,9 @@ impl DataStoreRequestHandler {
                 let response = match message_archive {
                     ArchivedRequest::Get(request) => handle_get_request(request, data.clone()),
                     ArchivedRequest::Put(request) => handle_put_request(request, data.clone()),
-                    ArchivedRequest::Delete(request) => handle_delete_request(request, data.clone()),
+                    ArchivedRequest::Delete(request) => {
+                        handle_delete_request(request, data.clone())
+                    }
                 };
 
                 match response {

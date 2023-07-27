@@ -319,6 +319,7 @@ impl MessageBusOutput {
     }
 }
 
+// Access to DashMap must be done from a synchronous function
 #[inline]
 pub fn retrieve_response_channel(
     channel_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
@@ -326,6 +327,18 @@ pub fn retrieve_response_channel(
 ) -> Option<Sender<BytesMut>> {
     match channel_map.get(&origination_address) {
         None => None,
-        Some(response_channel) => Some(response_channel.send_to_bus.clone()),
+        Some(entry) => Some(entry.send_to_bus.clone()),
+    }
+}
+
+// Access to DashMap must be done from a synchronous function
+#[inline]
+pub fn retrieve_command_channel(
+    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    key: &IpAddr,
+) -> Option<Sender<MessageBusCommand>> {
+    match node_map.get(key) {
+        None => None,
+        Some(entry) => Some(entry.command_channel.clone()),
     }
 }
