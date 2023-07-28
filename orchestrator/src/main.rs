@@ -6,18 +6,18 @@ use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tachyonix::channel;
-use tokio::io;
-
-extern crate rmp_serde as rmps;
+use tokio::io::Result;
+use tokio::net::TcpListener;
 
 use crate::core::router::Router;
 use crate::core::server::Server;
 use connection::connection_manager::ConnectionManager;
-use serde::{Deserialize, Serialize};
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<()> {
     println!("Hello from orchestrator!");
+
+    let cli_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
 
     let data_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
     let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
@@ -50,22 +50,24 @@ async fn main() -> io::Result<()> {
     });
 
     let (server, server_handle) = Server::new(data_address, to_router);
-    server
-        .serve(command_queue_sender.clone())
-        .await
-        .expect("Unable to start server!");
+
+    tokio::spawn(async move {
+        server
+            .serve(command_queue_sender.clone())
+            .await
+            .expect("Unable to start server!");
+    });
+
+    let cli_listener = TcpListener::bind(cli_address).await.unwrap();
+
+    loop{
+        match cli_listener.accept().await {
+            Ok(stream) => {
+                // TODO implement command receiver
+            }
+            Err(_) => { break }
+        }
+    }
 
     Ok(())
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Something {
-    key: String,
-    val: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-struct Complex {
-    key: String,
-    val: Something,
 }
