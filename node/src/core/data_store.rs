@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
 use connection::messages::{
     ArchivedDeleteRequest, ArchivedGetRequest, ArchivedPutRequest, ArchivedRequest, Command,
-    GetResponse, InvalidResponse, PutResponse, Request, RequestOrigin, Response,
+    GetResponse, InvalidRequestResponse, PutResponse, Request, RequestOrigin, Response,
 };
 use dashmap::DashMap;
 use rkyv::Archived;
@@ -77,7 +77,7 @@ fn handle_get_request(
     data: Arc<DashMap<String, BytesMut>>,
 ) -> Option<Response> {
     match data.get(request.key.as_str()) {
-        None => Some(Response::InvalidResponse(InvalidResponse {
+        None => Some(Response::InvalidRequestResponse(InvalidRequestResponse {
             id: request.id,
             key: request.key.to_string(),
         })),

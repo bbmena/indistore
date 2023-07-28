@@ -6,7 +6,6 @@ use connection::messages::{
     ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
     RouterCommand, RouterRequestWrapper,
 };
-use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
 use rkyv::Archived;
@@ -221,7 +220,7 @@ impl ResponseQueueProcessor {
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
                 ArchivedResponse::GetResponse(response) => Some((&response.key, &response.id)),
                 ArchivedResponse::PutResponse(response) => Some((&response.key, &response.id)),
-                ArchivedResponse::InvalidResponse(response) => Some((&response.key, &response.id)),
+                ArchivedResponse::InvalidRequestResponse(response) => Some((&response.key, &response.id)),
                 _ => None,
             };
             match routing_info {

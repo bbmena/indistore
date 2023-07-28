@@ -56,7 +56,7 @@ pub struct PutResponse {
 
 #[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
 #[archive(compare(PartialEq), check_bytes)]
-pub struct InvalidResponse {
+pub struct InvalidRequestResponse {
     pub id: Uuid,
     pub key: String,
 }
@@ -79,7 +79,7 @@ pub enum Response {
     GetResponse(GetResponse),
     PutResponse(PutResponse),
     DeleteResponse(),
-    InvalidResponse(InvalidResponse),
+    InvalidRequestResponse(InvalidRequestResponse),
 }
 
 impl RequestOrigin for Request {

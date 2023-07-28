@@ -1,12 +1,10 @@
-use bytes::{BufMut, Bytes, BytesMut};
 use dashmap::DashMap;
-use rmp_serde::Deserializer;
 use serde::Deserialize;
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Result, WriteHalf};
-use tokio::sync::Mutex;
 
 use tokio::net::TcpStream;
 use tokio::sync::oneshot;
@@ -14,8 +12,8 @@ use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
 
 use connection::messages::{
-    ArchivedGetResponse, ArchivedInvalidResponse, ArchivedPutResponse, ArchivedResponse,
-    GetRequest, GetResponse, InvalidResponse, PutRequest, PutResponse, Request, Response,
+    ArchivedResponse,
+    GetRequest, GetResponse, InvalidRequestResponse, PutRequest, PutResponse, Request, Response,
 };
 use connection::{deserialize, serialize};
 
@@ -55,13 +53,13 @@ async fn read_loop(
                                     .send(Response::PutResponse(resp))
                                     .expect("Unable to send response!");
                             }
-                            ArchivedResponse::InvalidResponse(invalid) => {
-                                let resp: InvalidResponse =
+                            ArchivedResponse::InvalidRequestResponse(invalid) => {
+                                let resp: InvalidRequestResponse =
                                     invalid.deserialize(&mut rkyv::Infallible).unwrap();
                                 let (_, sender) = arc_map_remove(response_map.clone(), &resp.id)
                                     .expect("Key not found!");
                                 sender
-                                    .send(Response::InvalidResponse(resp))
+                                    .send(Response::InvalidRequestResponse(resp))
                                     .expect("Unable to send response!");
                             }
                             _ => (),
@@ -116,7 +114,7 @@ impl Client {
         }
     }
 
-    pub async fn put<T>(&mut self, key: String, val: T)
+    pub async fn put<T>(&mut self, key: String, val: T) -> Result<bool>
     where
         T: serde::ser::Serialize,
     {
@@ -128,22 +126,25 @@ impl Client {
             key,
             payload,
         });
-        let mut buff = rkyv::to_bytes::<_, 2048>(&request).unwrap();
+        let buff = rkyv::to_bytes::<_, 2048>(&request).unwrap();
         let (sender, receiver) = oneshot::channel::<Response>();
         arc_map_insert(self.response_map.clone(), req_id, sender);
 
-        self.write_to_stream(buff).await;
+        self.send_request(buff).await;
 
-        let _ = match receiver.await.expect("Receiver Error!") {
-            Response::PutResponse(_) => {}
-            Response::InvalidResponse(_) => {}
+        match receiver.await.expect("Receiver Error!") {
+            Response::PutResponse(_) => Ok(true),
             _ => {
-                println!("Unsupported response type")
+                println!("Unsupported response to request type");
+                Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported response to request",
+                ))
             }
-        };
+        }
     }
 
-    pub async fn get<T>(&mut self, key: String) -> T
+    pub async fn get<T>(&mut self, key: String) -> Result<T>
     where
         T: for<'a> Deserialize<'a>,
     {
@@ -157,18 +158,25 @@ impl Client {
         let (sender, receiver) = oneshot::channel::<Response>();
         arc_map_insert(self.response_map.clone(), req_id, sender);
 
-        self.write_to_stream(buff).await;
+        self.send_request(buff).await;
 
-        let buff = match receiver.await.expect("Receiver Error!") {
-            Response::GetResponse(resp) => resp.payload,
-            Response::InvalidResponse(_) => Vec::new(),
-            _ => Vec::new(),
-        };
-        deserialize(buff)
+        match receiver.await.expect("Receiver Error!") {
+            Response::GetResponse(resp) => Ok(deserialize(resp.payload)),
+            Response::InvalidRequestResponse(resp) => {
+                Err(Error::new(ErrorKind::NotFound, format!("Value for key '{}' not found", resp.key)))
+            }
+            _ => {
+                println!("Unsupported response type");
+                Err(Error::new(
+                    ErrorKind::Unsupported,
+                    "Unsupported response to request type",
+                ))
+            }
+        }
     }
 
     #[inline(always)]
-    async fn write_to_stream(&mut self, buff: AlignedVec) {
+    async fn send_request(&mut self, buff: AlignedVec) {
         self.data_write_stream
             .write_u32(buff.len() as u32)
             .await
