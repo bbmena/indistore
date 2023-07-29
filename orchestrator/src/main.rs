@@ -1,26 +1,26 @@
+mod cli_listener;
 pub mod core;
 
 use bytes::BytesMut;
+use connection::connection_manager::ConnectionManager;
 use connection::messages::{RouterCommand, RouterRequestWrapper};
 use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tachyonix::channel;
 use tokio::io::Result;
-use tokio::net::TcpListener;
 
-use crate::core::router::Router;
-use crate::core::server::Server;
-use connection::connection_manager::ConnectionManager;
+use crate::cli_listener::CliListener;
+use crate::core::{router::Router, server::Server};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
-    println!("Hello from orchestrator!");
+    println!("Starting Orchestrator");
 
-    let cli_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
-
-    let data_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
+    let cli_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1336);
+    let client_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
     let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+
     let node_map = Arc::new(DashMap::new());
 
     // TODO ConnectionManager needs to be able to listen on multiple ports
@@ -49,7 +49,7 @@ async fn main() -> Result<()> {
             .await;
     });
 
-    let (server, server_handle) = Server::new(data_address, to_router);
+    let (server, server_handle) = Server::new(client_listener_address, to_router);
 
     tokio::spawn(async move {
         server
@@ -58,16 +58,8 @@ async fn main() -> Result<()> {
             .expect("Unable to start server!");
     });
 
-    let cli_listener = TcpListener::bind(cli_address).await.unwrap();
-
-    loop{
-        match cli_listener.accept().await {
-            Ok(stream) => {
-                // TODO implement command receiver
-            }
-            Err(_) => { break }
-        }
-    }
+    let cli_listener = CliListener::new(server_handle, router_handle);
+    cli_listener.listen(cli_listener_address).await;
 
     Ok(())
 }

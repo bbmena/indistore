@@ -32,7 +32,7 @@ use connection::messages::{
 use util::map_access_wrapper::arc_map_insert;
 
 pub struct ServerHandle {
-    command_channel: Sender<Command>,
+    pub command_channel: Sender<Command>,
 }
 
 pub struct Server {

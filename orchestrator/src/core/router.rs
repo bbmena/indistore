@@ -18,7 +18,7 @@ use util::map_access_wrapper::arc_map_insert;
 use uuid::Uuid;
 
 pub struct Router {
-    command_queue: Receiver<RouterCommand>,
+    command_channel: Receiver<RouterCommand>,
     hash_ring: Arc<Mutex<HashRing>>,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
@@ -26,11 +26,11 @@ pub struct Router {
 }
 
 pub struct RouterHandle {
-    command_queue: Sender<RouterCommand>,
+    pub command_channel: Sender<RouterCommand>,
 }
 
 pub struct RequestQueueProcessor {
-    request_queue: Receiver<RouterRequestWrapper>,
+    request_channel: Receiver<RouterRequestWrapper>,
     hash_ring: Arc<Mutex<HashRing>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
@@ -38,7 +38,7 @@ pub struct RequestQueueProcessor {
 }
 
 pub struct ResponseQueueProcessor {
-    response_queue: Receiver<BytesMut>,
+    response_channel: Receiver<BytesMut>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
 }
@@ -54,14 +54,14 @@ impl Router {
         let message_to_channel_map = Arc::new(DashMap::new());
 
         let router = Router {
-            command_queue: command_queue_receiver,
+            command_channel: command_queue_receiver,
             hash_ring,
             node_map,
             channel_map,
             message_to_channel_map,
         };
         let router_handle = RouterHandle {
-            command_queue: command_queue_sender,
+            command_channel: command_queue_sender,
         };
         (router, router_handle)
     }
@@ -78,7 +78,7 @@ impl Router {
         let node_map_ref = self.node_map.clone();
 
         let mut request_processor = RequestQueueProcessor {
-            request_queue,
+            request_channel: request_queue,
             hash_ring: hash_ring_ref,
             channel_map: channel_map_ref,
             message_to_channel_map: message_to_channel_map_ref,
@@ -89,7 +89,7 @@ impl Router {
         let message_to_channel_map_ref = self.message_to_channel_map.clone();
 
         let mut response_processor = ResponseQueueProcessor {
-            response_queue,
+            response_channel: response_queue,
             channel_map: channel_map_ref,
             message_to_channel_map: message_to_channel_map_ref,
         };
@@ -118,7 +118,7 @@ impl Router {
         });
 
         loop {
-            match self.command_queue.recv().await {
+            match self.command_channel.recv().await {
                 Ok(command) => match command {
                     RouterCommand::Shutdown() => {
                         self.shutdown(request_processor_handle, response_processor_handle)
@@ -164,7 +164,7 @@ impl Router {
 impl RequestQueueProcessor {
     async fn process(&mut self) {
         loop {
-            let message = self.request_queue.recv().await.expect("Unable to read!");
+            let message = self.request_channel.recv().await.expect("Unable to read!");
             let buff = message.body;
             let message_archive: &Archived<Request> =
                 rkyv::check_archived_root::<Request>(&buff[..]).unwrap();
@@ -214,13 +214,15 @@ impl RequestQueueProcessor {
 impl ResponseQueueProcessor {
     async fn process(&mut self) {
         loop {
-            let buff = self.response_queue.recv().await.expect("Unable to read!");
+            let buff = self.response_channel.recv().await.expect("Unable to read!");
             let message_archive: &Archived<Response> =
                 rkyv::check_archived_root::<Response>(&buff[..]).unwrap(); // TODO this starts to run into errors when a high number of channels are open from one client
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
                 ArchivedResponse::GetResponse(response) => Some((&response.key, &response.id)),
                 ArchivedResponse::PutResponse(response) => Some((&response.key, &response.id)),
-                ArchivedResponse::InvalidRequestResponse(response) => Some((&response.key, &response.id)),
+                ArchivedResponse::InvalidRequestResponse(response) => {
+                    Some((&response.key, &response.id))
+                }
                 _ => None,
             };
             match routing_info {

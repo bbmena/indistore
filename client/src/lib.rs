@@ -12,8 +12,8 @@ use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
 
 use connection::messages::{
-    ArchivedResponse,
-    GetRequest, GetResponse, InvalidRequestResponse, PutRequest, PutResponse, Request, Response,
+    ArchivedResponse, GetRequest, GetResponse, InvalidRequestResponse, PutRequest, PutResponse,
+    Request, Response,
 };
 use connection::{deserialize, serialize};
 
@@ -162,9 +162,10 @@ impl Client {
 
         match receiver.await.expect("Receiver Error!") {
             Response::GetResponse(resp) => Ok(deserialize(resp.payload)),
-            Response::InvalidRequestResponse(resp) => {
-                Err(Error::new(ErrorKind::NotFound, format!("Value for key '{}' not found", resp.key)))
-            }
+            Response::InvalidRequestResponse(resp) => Err(Error::new(
+                ErrorKind::NotFound,
+                format!("Value for key '{}' not found", resp.key),
+            )),
             _ => {
                 println!("Unsupported response type");
                 Err(Error::new(

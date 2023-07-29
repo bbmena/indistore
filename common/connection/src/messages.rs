@@ -82,6 +82,12 @@ pub enum Response {
     InvalidRequestResponse(InvalidRequestResponse),
 }
 
+#[derive(Archive, Serialize, Deserialize, Debug, PartialEq)]
+#[archive(compare(PartialEq), check_bytes)]
+pub enum CliCommand {
+    Shutdown(),
+}
+
 impl RequestOrigin for Request {
     fn request_origin(&self) -> IpAddr {
         match self {
