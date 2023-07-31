@@ -179,6 +179,7 @@ impl RequestQueueProcessor {
                 }
                 Some((key, req_id)) => {
                     let request_id = req_id.clone();
+                    // TODO: This could be a possible slowdown. move this out of a lock and have the RequestQueueProcessor own it while listening for add requests to add nodes to the ring
                     let key_owner = self
                         .hash_ring
                         .lock()
