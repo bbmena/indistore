@@ -19,6 +19,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use bytes::BytesMut;
+use connection::messages::Command;
 use dashmap::DashMap;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::io;
@@ -26,8 +27,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Wri
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use connection::messages::{
-    ChannelSubscribe, ChannelUnsubscribe, Command, RouterCommand, RouterRequestWrapper,
+use crate::core::messages::{
+    ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper,
 };
 use util::map_access_wrapper::arc_map_insert;
 

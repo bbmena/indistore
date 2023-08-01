@@ -1,11 +1,7 @@
-use crate::core::hash_ring::HashRing;
 use bytes::BytesMut;
 use connection::connection_manager::ConnectionManagerHandle;
 use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
-use connection::messages::{
-    ArchivedRequest, ArchivedResponse, ChannelSubscribe, ChannelUnsubscribe, Request, Response,
-    RouterCommand, RouterRequestWrapper,
-};
+use connection::messages::{ArchivedRequest, ArchivedResponse, Request, Response};
 use dashmap::DashMap;
 use rkyv::string::ArchivedString;
 use rkyv::Archived;
@@ -16,6 +12,11 @@ use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use util::map_access_wrapper::arc_map_insert;
 use uuid::Uuid;
+
+use crate::core::hash_ring::HashRing;
+use crate::core::messages::{
+    ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper,
+};
 
 pub struct Router {
     command_channel: Receiver<RouterCommand>,
