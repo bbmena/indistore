@@ -1,5 +1,6 @@
 mod cli_listener;
 pub mod core;
+mod settings;
 
 use bytes::BytesMut;
 use connection::connection_manager::ConnectionManager;
@@ -12,14 +13,17 @@ use tokio::io::Result;
 use crate::cli_listener::CliListener;
 use crate::core::{router::Router, server::Server};
 use crate::core::messages::{RouterCommand, RouterRequestWrapper};
+use crate::settings::Settings;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
     println!("Starting Orchestrator");
 
-    let cli_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1336);
-    let client_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1337);
-    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+    let settings = Settings::new().unwrap();
+
+    let cli_listener_address = SocketAddr::new(settings.listener_address, settings.cli.listener_port);
+    let client_listener_address = SocketAddr::new(settings.listener_address, settings.server.listener_port);
+    let node_listener_address = SocketAddr::new(settings.listener_address, settings.node_manager.listener_port);
 
     let node_map = Arc::new(DashMap::new());
 

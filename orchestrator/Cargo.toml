@@ -16,7 +16,8 @@ rkyv = { workspace=true }
 uuid = { workspace=true }
 sha3 = { workspace=true }
 dashmap = { workspace=true }
+config = { workspace=true }
 
 connection = { path="../common/connection" }
 util = { path="../common/util" }
-serde = { workspace=true }
+serde = { workspace=true, features = ["derive", "serde_derive", "std"] }

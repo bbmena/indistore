@@ -1,4 +1,5 @@
 pub mod core;
+mod settings;
 
 use crate::core::data_store::DataStore;
 use bytes::BytesMut;
@@ -9,11 +10,14 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use tachyonix::channel;
 use tokio::io;
+use crate::settings::Settings;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> io::Result<()> {
+    let settings = Settings::new().unwrap();
+
     let orchestrator_listener_address =
-        SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 2337);
+        SocketAddr::new(settings.listener_address, settings.orchestrator_manager.listener_port);
 
     let node_map = Arc::new(DashMap::new());
     let node_map_clone = node_map.clone();
@@ -41,7 +45,8 @@ async fn main() -> io::Result<()> {
 }
 
 async fn startup(handle: &ConnectionManagerHandle) {
-    let node_listener_address = SocketAddr::new(IpAddr::from(Ipv4Addr::new(127, 0, 0, 1)), 1338);
+    let settings = Settings::new().unwrap();
+    let node_listener_address = SocketAddr::new(settings.listener_address, 1338);
     handle
         .command_channel
         .send(NodeManagerCommand::Connect(Connect {

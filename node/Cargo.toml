@@ -12,5 +12,8 @@ tachyonix = { workspace = true }
 rkyv = { workspace=true }
 uuid = { workspace=true }
 dashmap = { workspace=true }
+config = { workspace=true }
+
+serde = { workspace=true, features = ["derive", "serde_derive", "std"] }
 
 connection = { path="../common/connection" }

@@ -19,9 +19,9 @@ serde = { version = "1.0.160", features = ["derive", "serde_derive", "std"]}
 sha3 = "0.10.8"
 dashmap = "5.4.0"
 async-channel = "1.9.0"
-
 tachyonix = "0.2.0"
 rkyv = { version = "0.7.42", features = ["validation", "uuid"] }
+config = { version = "0.13.3", features = ["toml", "yaml"] }
 
 [profile.release]
 debug = true
