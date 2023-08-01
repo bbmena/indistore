@@ -3,7 +3,6 @@ pub mod core;
 
 use bytes::BytesMut;
 use connection::connection_manager::ConnectionManager;
-use connection::messages::{RouterCommand, RouterRequestWrapper};
 use dashmap::DashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -12,6 +11,7 @@ use tokio::io::Result;
 
 use crate::cli_listener::CliListener;
 use crate::core::{router::Router, server::Server};
+use crate::core::messages::{RouterCommand, RouterRequestWrapper};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<()> {
