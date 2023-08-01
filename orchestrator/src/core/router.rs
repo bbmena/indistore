@@ -11,15 +11,13 @@ use rkyv::string::ArchivedString;
 use rkyv::Archived;
 use std::net::IpAddr;
 use std::sync::Arc;
-use tachyonix::{Receiver, Sender};
-use tokio::sync::Mutex;
+use tachyonix::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 use util::map_access_wrapper::arc_map_insert;
 use uuid::Uuid;
 
 pub struct Router {
     command_channel: Receiver<RouterCommand>,
-    hash_ring: Arc<Mutex<HashRing>>,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
@@ -31,10 +29,11 @@ pub struct RouterHandle {
 
 pub struct RequestQueueProcessor {
     request_channel: Receiver<RouterRequestWrapper>,
-    hash_ring: Arc<Mutex<HashRing>>,
+    hash_ring: HashRing,
     channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
     message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
     node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+    command_channel: Receiver<RouterCommand>,
 }
 
 pub struct ResponseQueueProcessor {
@@ -49,13 +48,11 @@ impl Router {
         command_queue_receiver: Receiver<RouterCommand>,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
     ) -> (Router, RouterHandle) {
-        let hash_ring = Arc::new(Mutex::new(HashRing::new()));
         let channel_map = Arc::new(DashMap::new());
         let message_to_channel_map = Arc::new(DashMap::new());
 
         let router = Router {
             command_channel: command_queue_receiver,
-            hash_ring,
             node_map,
             channel_map,
             message_to_channel_map,
@@ -74,15 +71,17 @@ impl Router {
     ) {
         let channel_map_ref = self.channel_map.clone();
         let message_to_channel_map_ref = self.message_to_channel_map.clone();
-        let hash_ring_ref = self.hash_ring.clone();
         let node_map_ref = self.node_map.clone();
+
+        let (to_request_processor, request_processor_receiver) = channel(100);
 
         let mut request_processor = RequestQueueProcessor {
             request_channel: request_queue,
-            hash_ring: hash_ring_ref,
+            hash_ring: HashRing::new(),
             channel_map: channel_map_ref,
             message_to_channel_map: message_to_channel_map_ref,
             node_map: node_map_ref,
+            command_channel: request_processor_receiver,
         };
 
         let channel_map_ref = self.channel_map.clone();
@@ -101,7 +100,7 @@ impl Router {
             response_processor.process().await;
         });
 
-        let hash_ring_ref = self.hash_ring.clone();
+        let command_channel = to_request_processor.clone();
         tokio::spawn(async move {
             loop {
                 let notification = connection_manager_handle
@@ -109,10 +108,10 @@ impl Router {
                     .recv()
                     .await
                     .expect("Unable to receive!");
-                hash_ring_ref
-                    .lock()
+                command_channel
+                    .send(RouterCommand::AddNode(notification.address.ip()))
                     .await
-                    .add_node(notification.address.ip());
+                    .expect("Unable to send AddNode request");
                 println!("Node added to ring");
             }
         });
@@ -129,7 +128,10 @@ impl Router {
                         self.add_subscriber(sub);
                     }
                     RouterCommand::AddNode(address) => {
-                        self.hash_ring.lock().await.add_node(address)
+                        to_request_processor
+                            .send(RouterCommand::AddNode(address))
+                            .await
+                            .expect("Unable to send AddNode request");
                     }
                     RouterCommand::Unsubscribe(unsub) => {
                         self.remove_subscriber(unsub);
@@ -164,46 +166,56 @@ impl Router {
 impl RequestQueueProcessor {
     async fn process(&mut self) {
         loop {
-            let message = self.request_channel.recv().await.expect("Unable to read!");
-            let buff = message.body;
-            let message_archive: &Archived<Request> =
-                rkyv::check_archived_root::<Request>(&buff[..]).unwrap();
-            let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
-                ArchivedRequest::Get(request) => Some((&request.key, &request.id)),
-                ArchivedRequest::Put(request) => Some((&request.key, &request.id)),
-                ArchivedRequest::Delete(request) => Some((&request.key, &request.id)),
-            };
-            match routing_info {
-                None => {
-                    println!("Invalid message type received")
-                }
-                Some((key, req_id)) => {
-                    let request_id = req_id.clone();
-                    // TODO: This could be a possible slowdown. move this out of a lock and have the RequestQueueProcessor own it while listening for add requests to add nodes to the ring
-                    let key_owner = self
-                        .hash_ring
-                        .lock()
-                        .await
-                        .find_key_owner(key.as_str().into())
-                        .clone();
-                    match key_owner {
-                        None => {
-                            println!("Unable to find address!")
+            tokio::select! {
+                command = self.command_channel.recv() => {
+                    match command.expect("") {
+                        RouterCommand::AddNode(address) => {
+                            self.hash_ring.add_node(address)
                         }
-                        Some(addr) => {
-                            match retrieve_response_channel(self.node_map.clone(), addr.clone()) {
+                        _ => {}
+                    }
+                }
+
+                message = self.request_channel.recv() => {
+                    let message = message.expect("");
+                    let buff = message.body;
+                    let message_archive: &Archived<Request> =
+                        rkyv::check_archived_root::<Request>(&buff[..]).unwrap();
+                    let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
+                        ArchivedRequest::Get(request) => Some((&request.key, &request.id)),
+                        ArchivedRequest::Put(request) => Some((&request.key, &request.id)),
+                        ArchivedRequest::Delete(request) => Some((&request.key, &request.id)),
+                    };
+                    match routing_info {
+                        None => {
+                            println!("Invalid message type received")
+                        }
+                        Some((key, req_id)) => {
+                            let request_id = req_id.clone();
+                            let key_owner = self
+                                .hash_ring
+                                .find_key_owner(key.as_str().into())
+                                .clone();
+                            match key_owner {
                                 None => {
-                                    println!("Response Channel for address {} not found", addr)
+                                    println!("Unable to find address!")
                                 }
-                                Some(response_channel) => {
-                                    response_channel.send(buff).await.expect("Unable to send!");
+                                Some(addr) => {
+                                    match retrieve_response_channel(self.node_map.clone(), addr.clone()) {
+                                        None => {
+                                            println!("Response Channel for address {} not found", addr)
+                                        }
+                                        Some(response_channel) => {
+                                            response_channel.send(buff).await.expect("Unable to send!");
+                                        }
+                                    }
+                                    arc_map_insert(
+                                        self.message_to_channel_map.clone(),
+                                        MessageId::new(request_id),
+                                        ChannelId::new(message.channel_id),
+                                    );
                                 }
                             }
-                            arc_map_insert(
-                                self.message_to_channel_map.clone(),
-                                MessageId::new(request_id),
-                                ChannelId::new(message.channel_id),
-                            );
                         }
                     }
                 }
