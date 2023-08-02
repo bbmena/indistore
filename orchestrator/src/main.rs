@@ -11,8 +11,8 @@ use tachyonix::channel;
 use tokio::io::Result;
 
 use crate::cli_listener::CliListener;
-use crate::core::{router::Router, server::Server};
 use crate::core::messages::{RouterCommand, RouterRequestWrapper};
+use crate::core::{router::Router, server::Server};
 use crate::settings::Settings;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -21,9 +21,14 @@ async fn main() -> Result<()> {
 
     let settings = Settings::new().unwrap();
 
-    let cli_listener_address = SocketAddr::new(settings.listener_address, settings.cli.listener_port);
-    let client_listener_address = SocketAddr::new(settings.listener_address, settings.server.listener_port);
-    let node_listener_address = SocketAddr::new(settings.listener_address, settings.node_manager.listener_port);
+    let cli_listener_address =
+        SocketAddr::new(settings.listener_address, settings.cli.listener_port);
+    let client_listener_address =
+        SocketAddr::new(settings.listener_address, settings.server.listener_port);
+    let node_listener_address = SocketAddr::new(
+        settings.listener_address,
+        settings.node_manager.listener_port,
+    );
 
     let node_map = Arc::new(DashMap::new());
 
@@ -55,9 +60,10 @@ async fn main() -> Result<()> {
 
     let (server, server_handle) = Server::new(client_listener_address, to_router);
 
+    let server_self_sender = server_handle.command_channel.clone();
     tokio::spawn(async move {
         server
-            .serve(command_queue_sender.clone())
+            .serve(command_queue_sender.clone(), server_self_sender)
             .await
             .expect("Unable to start server!");
     });

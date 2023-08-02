@@ -27,17 +27,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, Wri
 use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
-use crate::core::messages::{
-    ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper,
-};
-use util::map_access_wrapper::arc_map_insert;
+use crate::core::messages::{ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper, ServerCommand};
+use util::map_access_wrapper::{arc_map_insert, arc_map_remove};
 
 pub struct ServerHandle {
-    pub command_channel: Sender<Command>,
+    pub command_channel: Sender<ServerCommand>,
 }
 
 pub struct Server {
-    command_channel: Receiver<Command>,
+    command_channel: Receiver<ServerCommand>,
     address: SocketAddr,
     connections: Arc<DashMap<Uuid, ConnectionHandle>>,
     router_channel: Sender<RouterRequestWrapper>,
@@ -62,25 +60,38 @@ impl Server {
         (server, server_handle)
     }
 
-    pub async fn serve(mut self, router_command_queue: Sender<RouterCommand>) -> io::Result<()> {
+    pub async fn serve(
+        mut self,
+        router_command_channel: Sender<RouterCommand>,
+        self_command_channel: Sender<ServerCommand>,
+    ) -> io::Result<()> {
         let data_listener = TcpListener::bind(self.address).await.unwrap();
         let connections_ref = self.connections.clone();
         let listener = tokio::spawn(async move {
             loop {
-                let r_c = self.router_channel.clone();
-                let r_c_q = router_command_queue.clone();
+                let send_to_router = self.router_channel.clone();
+                let router_command_clone = router_command_channel.clone();
                 match data_listener.accept().await {
                     Ok((stream, _)) => {
                         let (connection, connection_handle) = Connection::new();
-                        let self_sender = connection_handle.command_channel.clone();
-                        // TODO this ref needs to be removed when the connection gets closed
+                        let connection_command_channel = connection_handle.command_channel.clone();
+                        let server_command_channel = self_command_channel.clone();
+
                         arc_map_insert(
                             connections_ref.clone(),
                             connection.channel_id,
                             connection_handle,
                         );
                         tokio::spawn(async move {
-                            connection.start(stream, r_c, r_c_q, self_sender).await;
+                            connection
+                                .start(
+                                    stream,
+                                    send_to_router,
+                                    router_command_clone,
+                                    connection_command_channel,
+                                    server_command_channel,
+                                )
+                                .await;
                         });
                     }
                     Err(_) => break,
@@ -88,22 +99,20 @@ impl Server {
             }
         });
 
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => match command {
-                    Command::Shutdown() => {
-                        listener.abort();
-                        for conn_handle in self.connections.iter() {
-                            conn_handle
-                                .command_channel
-                                .send(Command::Shutdown())
-                                .await
-                                .expect("Unable to send!");
-                        }
-                        break;
+        while let Ok(command) = self.command_channel.recv().await {
+            match command {
+                ServerCommand::Shutdown() => {
+                    listener.abort();
+                    for conn_handle in self.connections.iter() {
+                        conn_handle
+                            .command_channel
+                            .send(Command::Shutdown())
+                            .await
+                            .expect("Unable to send!");
                     }
-                },
-                _ => {}
+                    break;
+                }
+                ServerCommand::RemoveServerConnection(id) => { arc_map_remove(self.connections.clone(), &id); },
             }
         }
 
@@ -152,8 +161,9 @@ impl Connection {
         mut self,
         stream: TcpStream,
         send_to_router: Sender<RouterRequestWrapper>,
-        router_command_queue: Sender<RouterCommand>,
-        self_sender: Sender<Command>,
+        router_command_channel: Sender<RouterCommand>,
+        self_command_channel: Sender<Command>,
+        server_command_channel: Sender<ServerCommand>,
     ) {
         let (read, write) = tokio::io::split(stream);
         let (read_half_queue, read_input_queue) = channel::<Command>(100);
@@ -162,7 +172,7 @@ impl Connection {
         // large channel size causes slowdown on first request but subsequent requests are unaffected
         let (router_sender, receive_from_router) = channel::<BytesMut>(20_000);
 
-        router_command_queue
+        router_command_channel
             .send(RouterCommand::Subscribe(ChannelSubscribe {
                 channel_id: self.channel_id,
                 response_channel: router_sender,
@@ -187,7 +197,9 @@ impl Connection {
         });
 
         let read_handle = tokio::spawn(async move {
-            read_connection.read(self.channel_id, self_sender).await;
+            read_connection
+                .read(self.channel_id, self_command_channel)
+                .await;
         });
 
         loop {
@@ -213,17 +225,20 @@ impl Connection {
                             // }
                             break;
                         }
+                        _ => {}
                     }
                 }
                 Err(_) => break,
             }
         }
-        router_command_queue
+        router_command_channel
             .send(RouterCommand::Unsubscribe(ChannelUnsubscribe {
                 channel_id: self.channel_id,
             }))
             .await
             .expect("Unable to Subscribe!");
+
+        server_command_channel.send(ServerCommand::RemoveServerConnection(self.channel_id)).await.expect("Unable to send!")
     }
 }
 

@@ -6,6 +6,7 @@ use std::net::SocketAddr;
 use tachyonix::Sender;
 use tokio::io::AsyncReadExt;
 use tokio::net::{TcpListener, TcpStream};
+use crate::core::messages::ServerCommand;
 use crate::RouterCommand;
 
 pub struct CliListener {
@@ -40,7 +41,7 @@ impl CliListener {
 
 async fn handle_connection(
     mut stream: TcpStream,
-    server_channel: Sender<Command>,
+    server_channel: Sender<ServerCommand>,
     router_channel: Sender<RouterCommand>,
 ) {
     match stream.read_u32().await {
@@ -53,7 +54,7 @@ async fn handle_connection(
                     match command_archive {
                         ArchivedCliCommand::Shutdown() => {
                             server_channel
-                                .send(Command::Shutdown())
+                                .send(ServerCommand::Shutdown())
                                 .await
                                 .expect("Unable to send command to Server!");
                             router_channel

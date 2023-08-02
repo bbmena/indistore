@@ -10,6 +10,11 @@ pub enum RouterCommand {
     Unsubscribe(ChannelUnsubscribe),
 }
 
+pub enum ServerCommand {
+    Shutdown(),
+    RemoveServerConnection(Uuid),
+}
+
 pub struct RouterRequestWrapper {
     pub channel_id: Uuid,
     pub body: BytesMut,
