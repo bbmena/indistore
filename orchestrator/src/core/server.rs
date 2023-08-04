@@ -25,9 +25,12 @@ use tachyonix::{channel, Receiver, Sender};
 use tokio::io;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::core::messages::{ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper, ServerCommand};
+use crate::core::messages::{
+    ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper, ServerCommand,
+};
 use util::map_access_wrapper::{arc_map_insert, arc_map_remove};
 
 pub struct ServerHandle {
@@ -112,7 +115,9 @@ impl Server {
                     }
                     break;
                 }
-                ServerCommand::RemoveServerConnection(id) => { arc_map_remove(self.connections.clone(), &id); },
+                ServerCommand::RemoveServerConnection(id) => {
+                    arc_map_remove(self.connections.clone(), &id);
+                }
             }
         }
 
@@ -172,13 +177,21 @@ impl Connection {
         // large channel size causes slowdown on first request but subsequent requests are unaffected
         let (router_sender, receive_from_router) = channel::<BytesMut>(20_000);
 
+        let (oneshot_send, oneshot_receive) = oneshot::channel::<Option<Uuid>>();
         router_command_channel
             .send(RouterCommand::Subscribe(ChannelSubscribe {
                 channel_id: self.channel_id,
                 response_channel: router_sender,
+                subscribe_acknowledge: oneshot_send,
             }))
             .await
             .expect("Unable to Subscribe!");
+
+        // In most cases this should eval to None. Will only set a new id if there was a collision found in the Router channel_map. Has been encountered in testing.
+        match oneshot_receive.await.expect("Unable to receive!") {
+            None => {}
+            Some(id) => self.channel_id = id,
+        }
 
         let read_connection = ReadConnection {
             data_read_stream: BufReader::new(read),
@@ -238,7 +251,10 @@ impl Connection {
             .await
             .expect("Unable to Subscribe!");
 
-        server_command_channel.send(ServerCommand::RemoveServerConnection(self.channel_id)).await.expect("Unable to send!")
+        server_command_channel
+            .send(ServerCommand::RemoveServerConnection(self.channel_id))
+            .await
+            .expect("Unable to send!")
     }
 }
 

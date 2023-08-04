@@ -8,6 +8,7 @@ use rkyv::Archived;
 use std::net::IpAddr;
 use std::sync::Arc;
 use tachyonix::{Receiver, Sender};
+use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use util::map_access_wrapper::arc_map_insert;
@@ -127,7 +128,8 @@ impl Router {
                         break;
                     }
                     RouterCommand::Subscribe(sub) => {
-                        self.add_subscriber(sub);
+                        let sub_ack = self.add_subscriber(sub.channel_id, sub.response_channel);
+                        let _ = sub.subscribe_acknowledge.send(sub_ack);
                     }
                     RouterCommand::AddNode(address) => {
                         self.hash_ring.lock().await.add_node(address)
@@ -151,9 +153,20 @@ impl Router {
         response_processor_handle.abort();
     }
 
-    fn add_subscriber(&self, sub: ChannelSubscribe) {
-        self.channel_map
-            .insert(ChannelId::new(sub.channel_id), sub.response_channel);
+    fn add_subscriber(&self, channel_id: Uuid, response_channel: Sender<BytesMut>) -> Option<Uuid> {
+        match self.channel_map.contains_key(&ChannelId::new(channel_id)) {
+            true => {
+                let id = Uuid::new_v4();
+                self.channel_map
+                    .insert(ChannelId::new(id.clone()), response_channel);
+                Some(id)
+            }
+            false => {
+                self.channel_map
+                    .insert(ChannelId::new(channel_id), response_channel);
+                None
+            }
+        }
     }
 
     // TODO: Unsub message could fail to be sent in the case of a thread panic. Might be good to add a periodic job to purge stale subscriptions.
