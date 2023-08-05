@@ -1,0 +1,10 @@
+listener_address = "127.0.0.1"
+
+[server]
+listener_port = 1337
+
+[node_manager]
+listener_port = 1338
+
+[cli]
+listener_port = 1336
