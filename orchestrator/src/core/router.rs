@@ -1,18 +1,20 @@
-use bytes::BytesMut;
-use connection::connection_manager::ConnectionManagerHandle;
-use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
-use connection::messages::{ArchivedRequest, ArchivedResponse, Request, Response};
-use dashmap::DashMap;
-use rkyv::string::ArchivedString;
-use rkyv::Archived;
 use std::net::IpAddr;
 use std::sync::Arc;
+
+use bytes::BytesMut;
+use dashmap::DashMap;
+use rkyv::Archived;
+use rkyv::string::ArchivedString;
 use tachyonix::{Receiver, Sender};
-use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::task::JoinHandle;
-use util::map_access_wrapper::arc_map_insert;
 use uuid::Uuid;
+
+use connection::connection_manager::ConnectionManagerHandle;
+use connection::message_bus::{MessageBusHandle, retrieve_messagebus_sender};
+use connection::messages::{ArchivedRequest, ArchivedResponse, Request, Response};
+use util::map_access_wrapper::arc_map_insert;
 
 use crate::core::hash_ring::HashRing;
 use crate::core::messages::{
@@ -205,7 +207,7 @@ impl RequestQueueProcessor {
                             println!("Unable to find address!")
                         }
                         Some(addr) => {
-                            match retrieve_response_channel(self.node_map.clone(), addr.clone()) {
+                            match retrieve_messagebus_sender(self.node_map.clone(), addr.clone()) {
                                 None => {
                                     println!("Response Channel for address {} not found", addr)
                                 }
@@ -252,8 +254,8 @@ impl ResponseQueueProcessor {
                         Some(channel_id) => {
                             match channel_map_lookup(self.channel_map.clone(), channel_id) {
                                 None => {
-                                    //TODO client is left waiting when this error occurs. Need to send an error back to the client
-                                    println!("Channel ID not found!")
+                                    // If this error occurs, it means that the server connection dropped while a request was in-flight and the channel was removed.
+                                    println!("Channel not found! Dropping message with id: {response_id}")
                                 }
                                 Some(sender) => {
                                     sender.send(buff).await.expect("Unable to send response!");

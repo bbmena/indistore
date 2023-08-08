@@ -1,5 +1,5 @@
 use bytes::BytesMut;
-use connection::message_bus::{retrieve_response_channel, MessageBusHandle};
+use connection::message_bus::{retrieve_messagebus_sender, MessageBusHandle};
 use connection::messages::{
     ArchivedDeleteRequest, ArchivedGetRequest, ArchivedPutRequest, ArchivedRequest, Command,
     GetResponse, InvalidRequestResponse, PutResponse, Request, RequestOrigin, Response,
@@ -141,7 +141,7 @@ impl DataStoreRequestHandler {
                         let buff = rkyv::to_bytes::<_, 2048>(&resp).expect("Can't serialize!");
                         let bytes = BytesMut::from(&buff[..]);
                         // Any interaction with DashMap needs to be wrapped in a sync function. Async access can cause deadlock
-                        match retrieve_response_channel(
+                        match retrieve_messagebus_sender(
                             channel_map.clone(),
                             origination_address.clone(),
                         ) {
