@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub fn serialize<T>(val: T) -> Vec<u8>
 where
-    T: serde::ser::Serialize,
+    T: Serialize,
 {
     let mut buff = Vec::new();
     rmp_serde::encode::write_named(&mut buff, &val).expect("Unable to serialize!");

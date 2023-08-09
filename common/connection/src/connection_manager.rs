@@ -3,7 +3,6 @@ use crate::messages::{
     AddConnection, ConnectionNotification, MessageBusCommand, NodeManagerCommand,
 };
 use bytes::BytesMut;
-use dashmap::mapref::one::Ref;
 use dashmap::DashMap;
 use std::{
     net::{IpAddr, SocketAddr},

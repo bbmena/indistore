@@ -3,23 +3,20 @@ use std::sync::Arc;
 
 use bytes::BytesMut;
 use dashmap::DashMap;
-use rkyv::Archived;
 use rkyv::string::ArchivedString;
+use rkyv::Archived;
 use tachyonix::{Receiver, Sender};
 use tokio::sync::Mutex;
-use tokio::sync::oneshot::Sender as OneshotSender;
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use connection::connection_manager::ConnectionManagerHandle;
-use connection::message_bus::{MessageBusHandle, retrieve_messagebus_sender};
+use connection::message_bus::{retrieve_messagebus_sender, MessageBusHandle};
 use connection::messages::{ArchivedRequest, ArchivedResponse, Request, Response};
 use util::map_access_wrapper::arc_map_insert;
 
 use crate::core::hash_ring::HashRing;
-use crate::core::messages::{
-    ChannelSubscribe, ChannelUnsubscribe, RouterCommand, RouterRequestWrapper,
-};
+use crate::core::messages::{ChannelUnsubscribe, RouterCommand, RouterRequestWrapper};
 
 pub struct Router {
     command_channel: Receiver<RouterCommand>,

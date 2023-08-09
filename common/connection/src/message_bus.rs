@@ -8,7 +8,6 @@ use tokio::net::TcpStream;
 
 use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
-use dashmap::mapref::one::Ref;
 use util::map_access_wrapper::map_insert;
 
 use crate::messages::{Command, MessageBusCommand};
@@ -49,7 +48,7 @@ impl ReadConnection {
                     Ok(message_size) => {
                         let mut vec = vec![0; message_size as usize];
                         match self.data_read_stream.read_exact(&mut vec).await {
-                            Ok(s) => {
+                            Ok(_) => {
                                 // TODO find a way around a copy here
                                 let buff = BytesMut::from(&vec[..]);
                                 output_channel.send(buff).await.expect("Unable to send!")
@@ -70,12 +69,7 @@ pub struct WriteConnection {
 }
 
 impl WriteConnection {
-    pub async fn write(
-        mut self,
-        input_channel: Async_Receiver<BytesMut>,
-        self_address: SocketAddr,
-        target_address: SocketAddr,
-    ) {
+    pub async fn write(mut self, input_channel: Async_Receiver<BytesMut>) {
         tokio::spawn(async move {
             loop {
                 let mut buffer = input_channel.recv().await.expect("unable to receive!");
@@ -139,7 +133,6 @@ impl ConnectionLane {
         stream: TcpStream,
     ) {
         let local_address = stream.local_addr().expect("oh noes").clone();
-        let target_address = stream.peer_addr().expect("oh noes").clone();
         println!("Starting new lane at {}", &local_address);
         let (read, write) = tokio::io::split(stream);
 
@@ -157,9 +150,7 @@ impl ConnectionLane {
         };
 
         tokio::spawn(async move {
-            write
-                .write(input_channel, local_address, target_address)
-                .await;
+            write.write(input_channel).await;
         });
 
         tokio::spawn(async move {

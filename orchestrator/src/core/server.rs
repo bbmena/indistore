@@ -205,11 +205,11 @@ impl Connection {
             router_channel: receive_from_router,
         };
 
-        let write_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             write_connection.write().await;
         });
 
-        let read_handle = tokio::spawn(async move {
+        tokio::spawn(async move {
             read_connection
                 .read(self.channel_id, self_command_channel)
                 .await;
@@ -238,7 +238,6 @@ impl Connection {
                             // }
                             break;
                         }
-                        _ => {}
                     }
                 }
                 Err(_) => break,
