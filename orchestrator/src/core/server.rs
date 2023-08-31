@@ -17,6 +17,8 @@
 
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use connection::messages::Command;
@@ -106,6 +108,7 @@ impl Server {
             match command {
                 ServerCommand::Shutdown() => {
                     listener.abort();
+                    // TODO: This has no way of knowing when each channel is closed. For graceful shutdown it should remain open until they are all done. Fix with refactor of handle where handle owns the task spawning the actor
                     for conn_handle in self.connections.iter() {
                         conn_handle
                             .command_channel
@@ -132,20 +135,6 @@ pub struct ConnectionHandle {
 pub struct Connection {
     command_channel: Receiver<Command>,
     channel_id: Uuid,
-}
-
-/** Reads from connected client and relays the request on to the router **/
-pub struct ReadConnection {
-    data_read_stream: BufReader<ReadHalf<TcpStream>>,
-    command_channel: Receiver<Command>,
-    router_channel: Sender<RouterRequestWrapper>,
-}
-
-/** Writes back to the client the response it receives from the router **/
-pub struct WriteConnection {
-    data_write_stream: BufWriter<WriteHalf<TcpStream>>,
-    command_channel: Receiver<Command>,
-    router_channel: Receiver<BytesMut>,
 }
 
 impl Connection {
@@ -194,24 +183,20 @@ impl Connection {
         }
 
         let read_connection = ReadConnection {
-            data_read_stream: BufReader::new(read),
             command_channel: read_input_queue,
-            router_channel: send_to_router,
         };
 
         let write_connection = WriteConnection {
-            data_write_stream: BufWriter::new(write),
             command_channel: write_input_queue,
-            router_channel: receive_from_router,
         };
 
-        tokio::spawn(async move {
-            write_connection.write().await;
+        let write_handle = tokio::spawn(async move {
+            write_connection.write(BufWriter::new(write), receive_from_router).await;
         });
 
-        tokio::spawn(async move {
+        let read_handle = tokio::spawn(async move {
             read_connection
-                .read(self.channel_id, self_command_channel)
+                .read(self.channel_id, BufReader::new(read), send_to_router, self_command_channel)
                 .await;
         });
 
@@ -232,10 +217,9 @@ impl Connection {
                                 .await
                                 .expect("Unable to send!");
                             // Wait until both have closed before closing the Connection object
-                            // TODO write_handle needs to process the shutdown command
-                            // while !read_handle.is_finished() || !write_handle.is_finished() {
-                            //     sleep(Duration::from_millis(1))
-                            // }
+                            while !read_handle.is_finished() || !write_handle.is_finished() {
+                                sleep(Duration::from_millis(1))
+                            }
                             break;
                         }
                     }
@@ -257,56 +241,98 @@ impl Connection {
     }
 }
 
+/** Reads from connected client and relays the request on to the router **/
+pub struct ReadConnection {
+    command_channel: Receiver<Command>,
+}
+
 impl ReadConnection {
-    async fn read(mut self, channel_id: Uuid, server_command_channel: Sender<Command>) {
-        loop {
-            match self.data_read_stream.read_u32().await {
-                Ok(message_size) => {
-                    let mut buff = BytesMut::with_capacity(message_size as usize);
-                    // TODO: will likely need a different read function here to ensure we get the whole buffer. Or repeat the read until we fill the buffer
-                    match self.data_read_stream.read_buf(&mut buff).await {
-                        Ok(_) => {
-                            self.router_channel
-                                .send(RouterRequestWrapper {
-                                    channel_id,
-                                    body: buff,
-                                })
-                                .await
-                                .expect("Unable to send!");
+    async fn read(mut self, channel_id: Uuid, mut data_read_stream: BufReader<ReadHalf<TcpStream>>, router_channel: Sender<RouterRequestWrapper>, server_command_channel: Sender<Command>) {
+        let read_task = tokio::spawn(async move {
+            loop {
+                match data_read_stream.read_u32().await {
+                    Ok(message_size) => {
+                        let mut buff = BytesMut::with_capacity(message_size as usize);
+                        // TODO: will likely need a different read function here to ensure we get the whole buffer. Or repeat the read until we fill the buffer
+                        match data_read_stream.read_buf(&mut buff).await {
+                            Ok(_) => {
+                                router_channel
+                                    .send(RouterRequestWrapper {
+                                        channel_id,
+                                        body: buff,
+                                    })
+                                    .await
+                                    .expect("Unable to send!");
+                            }
+                            Err(_) => break,
                         }
-                        Err(_) => break,
+                    }
+                    Err(_) => break,
+                }
+            }
+            server_command_channel
+                .send(Command::Shutdown())
+                .await
+                .expect("Cannot send!");
+        });
+        loop {
+            match self.command_channel.recv().await {
+                Ok(command) => {
+                    match command {
+                        Command::Shutdown() => {
+                            read_task.abort();
+                            break
+                        }
                     }
                 }
-                Err(_) => break,
+                Err(_) => break
             }
         }
-        server_command_channel
-            .send(Command::Shutdown())
-            .await
-            .expect("Cannot send!");
     }
 }
 
+/** Writes back to the client the response it receives from the router **/
+pub struct WriteConnection {
+    command_channel: Receiver<Command>,
+}
+
 impl WriteConnection {
-    pub async fn write(mut self) {
+    pub async fn write(mut self, mut data_write_stream: BufWriter<WriteHalf<TcpStream>>, mut router_channel: Receiver<BytesMut>) {
+        let write_task = tokio::spawn(async move {
+            loop {
+                match router_channel.recv().await {
+                    Ok(mut buffer) => {
+                        data_write_stream
+                            .write_u32(buffer.len() as u32)
+                            .await
+                            .expect("Unable to write!");
+                        data_write_stream
+                            .write_buf(&mut buffer)
+                            .await
+                            .expect("Unable to write buffer!");
+                        match data_write_stream.flush().await {
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
         loop {
-            match self.router_channel.recv().await {
-                Ok(mut buffer) => {
-                    self.data_write_stream
-                        .write_u32(buffer.len() as u32)
-                        .await
-                        .expect("Unable to write!");
-                    self.data_write_stream
-                        .write_buf(&mut buffer)
-                        .await
-                        .expect("Unable to write buffer!");
-                    match self.data_write_stream.flush().await {
-                        Ok(_) => {}
-                        Err(_) => break,
+            match self.command_channel.recv().await {
+                Ok(command) => {
+                    match command {
+                        Command::Shutdown() => {
+                            // TODO: This may cause loss of messages currently in flight
+                            write_task.abort();
+                            break
+                        }
                     }
                 }
-                Err(_) => break,
+                Err(_) => break
             }
         }
+
     }
 }
