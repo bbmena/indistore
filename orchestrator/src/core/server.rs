@@ -15,8 +15,10 @@
 //!
 //!    * `WriteConnection` accepts responses from the Router and send them to the Client.
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::task::Context;
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -24,10 +26,11 @@ use bytes::BytesMut;
 use connection::messages::Command;
 use dashmap::DashMap;
 use tachyonix::{channel, Receiver, Sender};
-use tokio::io;
+use tokio::{io, task};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::core::messages::{
@@ -37,6 +40,7 @@ use util::map_access_wrapper::{arc_map_insert, arc_map_remove};
 
 pub struct ServerHandle {
     pub command_channel: Sender<ServerCommand>,
+    pub server_task: JoinHandle<()>,
 }
 
 pub struct Server {
@@ -46,12 +50,13 @@ pub struct Server {
     router_channel: Sender<RouterRequestWrapper>,
 }
 
-impl Server {
+impl ServerHandle {
     pub fn new(
         address: SocketAddr,
         router_channel: Sender<RouterRequestWrapper>,
-    ) -> (Server, ServerHandle) {
-        let (tx, rx) = channel(100);
+        router_command_channel: Sender<RouterCommand>,
+    ) -> ServerHandle {
+        let (command_channel, rx) = channel(100);
         let server = Server {
             command_channel: rx,
             address,
@@ -59,12 +64,24 @@ impl Server {
             router_channel,
         };
 
-        let server_handle = ServerHandle {
-            command_channel: tx,
-        };
-        (server, server_handle)
-    }
+        let server_self_sender = command_channel.clone();
+        let server_task: JoinHandle<()> = tokio::spawn(async move {
+            server
+                .serve(router_command_channel, server_self_sender)
+                .await
+                .expect("Unable to start server!");
+        });
 
+        let server_handle = ServerHandle {
+            command_channel,
+            server_task,
+        };
+
+        server_handle
+    }
+}
+
+impl Server {
     pub async fn serve(
         mut self,
         router_command_channel: Sender<RouterCommand>,
@@ -78,26 +95,18 @@ impl Server {
                 let router_command_clone = router_command_channel.clone();
                 match data_listener.accept().await {
                     Ok((stream, _)) => {
-                        let (connection, connection_handle) = Connection::new();
-                        let connection_command_channel = connection_handle.command_channel.clone();
                         let server_command_channel = self_command_channel.clone();
-
+                        let connection_handle = ConnectionHandle::new(
+                            stream,
+                            send_to_router,
+                            router_command_clone,
+                            server_command_channel,
+                        );
                         arc_map_insert(
                             connections_ref.clone(),
-                            connection.channel_id,
+                            connection_handle.channel_id,
                             connection_handle,
                         );
-                        tokio::spawn(async move {
-                            connection
-                                .start(
-                                    stream,
-                                    send_to_router,
-                                    router_command_clone,
-                                    connection_command_channel,
-                                    server_command_channel,
-                                )
-                                .await;
-                        });
                     }
                     Err(_) => break,
                 }
@@ -108,13 +117,15 @@ impl Server {
             match command {
                 ServerCommand::Shutdown() => {
                     listener.abort();
-                    // TODO: This has no way of knowing when each channel is closed. For graceful shutdown it should remain open until they are all done. Fix with refactor of handle where handle owns the task spawning the actor
                     for conn_handle in self.connections.iter() {
                         conn_handle
                             .command_channel
                             .send(Command::Shutdown())
                             .await
                             .expect("Unable to send!");
+                        // Wait for the task to finish, that way we know the connection has been shut down
+                        // TODO need something better than this
+                        while !conn_handle.connection_task.is_finished() {}
                     }
                     break;
                 }
@@ -130,6 +141,45 @@ impl Server {
 
 pub struct ConnectionHandle {
     command_channel: Sender<Command>,
+    channel_id: Uuid,
+    connection_task: JoinHandle<()>,
+}
+
+impl ConnectionHandle {
+    pub fn new(
+        stream: TcpStream,
+        send_to_router: Sender<RouterRequestWrapper>,
+        router_command_channel: Sender<RouterCommand>,
+        server_command_channel: Sender<ServerCommand>,
+    ) -> ConnectionHandle {
+        let (command_sender, command_receiver) = channel(100);
+        let id = Uuid::new_v4();
+        let connection = Connection {
+            command_channel: command_receiver,
+            channel_id: id.clone(),
+        };
+
+        let connection_command_channel = command_sender.clone();
+        let connection_task = tokio::spawn(async move {
+            connection
+                .start(
+                    stream,
+                    send_to_router,
+                    router_command_channel,
+                    connection_command_channel,
+                    server_command_channel,
+                )
+                .await;
+        });
+
+        let connection_handle = ConnectionHandle {
+            command_channel: command_sender,
+            channel_id: id.clone(),
+            connection_task,
+        };
+
+        connection_handle
+    }
 }
 
 pub struct Connection {
@@ -138,19 +188,6 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn new() -> (Connection, ConnectionHandle) {
-        let (tx, rx) = channel(100);
-        let connection = Connection {
-            command_channel: rx,
-            channel_id: Uuid::new_v4(),
-        };
-
-        let connection_handle = ConnectionHandle {
-            command_channel: tx,
-        };
-        (connection, connection_handle)
-    }
-
     pub async fn start(
         mut self,
         stream: TcpStream,
@@ -191,12 +228,19 @@ impl Connection {
         };
 
         let write_handle = tokio::spawn(async move {
-            write_connection.write(BufWriter::new(write), receive_from_router).await;
+            write_connection
+                .write(BufWriter::new(write), receive_from_router)
+                .await;
         });
 
         let read_handle = tokio::spawn(async move {
             read_connection
-                .read(self.channel_id, BufReader::new(read), send_to_router, self_command_channel)
+                .read(
+                    self.channel_id,
+                    BufReader::new(read),
+                    send_to_router,
+                    self_command_channel,
+                )
                 .await;
         });
 
@@ -247,7 +291,13 @@ pub struct ReadConnection {
 }
 
 impl ReadConnection {
-    async fn read(mut self, channel_id: Uuid, mut data_read_stream: BufReader<ReadHalf<TcpStream>>, router_channel: Sender<RouterRequestWrapper>, server_command_channel: Sender<Command>) {
+    async fn read(
+        mut self,
+        channel_id: Uuid,
+        mut data_read_stream: BufReader<ReadHalf<TcpStream>>,
+        router_channel: Sender<RouterRequestWrapper>,
+        server_command_channel: Sender<Command>,
+    ) {
         let read_task = tokio::spawn(async move {
             loop {
                 match data_read_stream.read_u32().await {
@@ -277,15 +327,13 @@ impl ReadConnection {
         });
         loop {
             match self.command_channel.recv().await {
-                Ok(command) => {
-                    match command {
-                        Command::Shutdown() => {
-                            read_task.abort();
-                            break
-                        }
+                Ok(command) => match command {
+                    Command::Shutdown() => {
+                        read_task.abort();
+                        break;
                     }
-                }
-                Err(_) => break
+                },
+                Err(_) => break,
             }
         }
     }
@@ -297,7 +345,11 @@ pub struct WriteConnection {
 }
 
 impl WriteConnection {
-    pub async fn write(mut self, mut data_write_stream: BufWriter<WriteHalf<TcpStream>>, mut router_channel: Receiver<BytesMut>) {
+    pub async fn write(
+        mut self,
+        mut data_write_stream: BufWriter<WriteHalf<TcpStream>>,
+        mut router_channel: Receiver<BytesMut>,
+    ) {
         let write_task = tokio::spawn(async move {
             loop {
                 match router_channel.recv().await {
@@ -326,13 +378,12 @@ impl WriteConnection {
                         Command::Shutdown() => {
                             // TODO: This may cause loss of messages currently in flight
                             write_task.abort();
-                            break
+                            break;
                         }
                     }
                 }
-                Err(_) => break
+                Err(_) => break,
             }
         }
-
     }
 }

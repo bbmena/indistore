@@ -12,6 +12,7 @@ use tokio::io::Result;
 
 use crate::cli_listener::CliListener;
 use crate::core::messages::{RouterCommand, RouterRequestWrapper};
+use crate::core::server::ServerHandle;
 use crate::core::{router::Router, server::Server};
 use crate::settings::Settings;
 
@@ -58,15 +59,11 @@ async fn main() -> Result<()> {
             .await;
     });
 
-    let (server, server_handle) = Server::new(client_listener_address, to_router);
-
-    let server_self_sender = server_handle.command_channel.clone();
-    tokio::spawn(async move {
-        server
-            .serve(command_queue_sender.clone(), server_self_sender)
-            .await
-            .expect("Unable to start server!");
-    });
+    let server_handle = ServerHandle::new(
+        client_listener_address,
+        to_router,
+        command_queue_sender.clone(),
+    );
 
     let cli_listener = CliListener::new(server_handle, router_handle);
     cli_listener.listen(cli_listener_address).await;
