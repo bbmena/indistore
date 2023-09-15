@@ -28,28 +28,18 @@ pub struct Router {
 
 pub struct RouterHandle {
     pub command_channel: Sender<RouterCommand>,
+    router_task: JoinHandle<()>,
 }
 
-pub struct RequestQueueProcessor {
-    request_channel: Receiver<RouterRequestWrapper>,
-    hash_ring: Arc<Mutex<HashRing>>,
-    channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
-    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
-    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-}
-
-pub struct ResponseQueueProcessor {
-    response_channel: Receiver<BytesMut>,
-    channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
-    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
-}
-
-impl Router {
+impl RouterHandle {
     pub fn new(
         command_queue_sender: Sender<RouterCommand>,
         command_queue_receiver: Receiver<RouterCommand>,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-    ) -> (Router, RouterHandle) {
+        request_queue: Receiver<RouterRequestWrapper>,
+        response_queue: Receiver<BytesMut>,
+        mut connection_manager_handle: ConnectionManagerHandle,
+    ) -> RouterHandle {
         let hash_ring = Arc::new(Mutex::new(HashRing::new()));
         let channel_map = Arc::new(DashMap::new());
         let message_to_channel_map = Arc::new(DashMap::new());
@@ -61,12 +51,20 @@ impl Router {
             channel_map,
             message_to_channel_map,
         };
-        let router_handle = RouterHandle {
-            command_channel: command_queue_sender,
-        };
-        (router, router_handle)
-    }
 
+        let router_task = tokio::spawn(async move {
+            router
+                .route(request_queue, response_queue, connection_manager_handle)
+                .await
+        });
+        RouterHandle {
+            command_channel: command_queue_sender,
+            router_task,
+        }
+    }
+}
+
+impl Router {
     pub async fn route(
         mut self,
         request_queue: Receiver<RouterRequestWrapper>,
@@ -174,6 +172,14 @@ impl Router {
     }
 }
 
+pub struct RequestQueueProcessor {
+    request_channel: Receiver<RouterRequestWrapper>,
+    hash_ring: Arc<Mutex<HashRing>>,
+    channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
+    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
+    node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
+}
+
 impl RequestQueueProcessor {
     async fn process(&mut self) {
         loop {
@@ -223,6 +229,12 @@ impl RequestQueueProcessor {
             }
         }
     }
+}
+
+pub struct ResponseQueueProcessor {
+    response_channel: Receiver<BytesMut>,
+    channel_map: Arc<DashMap<ChannelId, Sender<BytesMut>>>,
+    message_to_channel_map: Arc<DashMap<MessageId, ChannelId>>,
 }
 
 impl ResponseQueueProcessor {

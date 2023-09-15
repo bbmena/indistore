@@ -12,6 +12,7 @@ use tokio::io::Result;
 
 use crate::cli_listener::CliListener;
 use crate::core::messages::{RouterCommand, RouterRequestWrapper};
+use crate::core::router::RouterHandle;
 use crate::core::server::ServerHandle;
 use crate::core::{router::Router, server::Server};
 use crate::settings::Settings;
@@ -40,12 +41,6 @@ async fn main() -> Result<()> {
     let (to_router, for_router) = channel::<RouterRequestWrapper>(200_000);
     let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(1000);
 
-    let (router, router_handle) = Router::new(
-        command_queue_sender.clone(),
-        command_queue_receiver,
-        node_map.clone(),
-    );
-
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
     let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(200_000);
 
@@ -53,11 +48,14 @@ async fn main() -> Result<()> {
         node_manager.start(to_router_from_node).await;
     });
 
-    tokio::spawn(async move {
-        router
-            .route(for_router, from_node_to_router, node_manager_handle)
-            .await;
-    });
+    let router_handle = RouterHandle::new(
+        command_queue_sender.clone(),
+        command_queue_receiver,
+        node_map.clone(),
+        for_router,
+        from_node_to_router,
+        node_manager_handle,
+    );
 
     let server_handle = ServerHandle::new(
         client_listener_address,
