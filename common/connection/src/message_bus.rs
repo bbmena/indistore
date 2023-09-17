@@ -126,9 +126,10 @@ impl ConnectionLaneHandle {
         };
 
         let connection_lane_task = tokio::spawn(async move {
-            connection_lane.start(input_channel, output_channel, stream).await
+            connection_lane
+                .start(input_channel, output_channel, stream)
+                .await
         });
-
 
         ConnectionLaneHandle {
             command_channel: tx,
@@ -202,9 +203,7 @@ pub struct MessageBusHandle {
 }
 
 impl MessageBusHandle {
-    pub fn new(
-        output_channel: Sender<BytesMut>,
-    ) -> MessageBusHandle {
+    pub fn new(output_channel: Sender<BytesMut>) -> MessageBusHandle {
         let connections = DashMap::new();
         let (tx, rx) = channel::<MessageBusCommand>(100);
         let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
@@ -215,9 +214,8 @@ impl MessageBusHandle {
             message_bus_health: MessageBusHealth::HEALTHY,
         };
 
-        let message_bus_task = tokio::spawn(async move {
-            message_bus.start(input_channel, output_channel).await
-        });
+        let message_bus_task =
+            tokio::spawn(async move { message_bus.start(input_channel, output_channel).await });
 
         MessageBusHandle {
             command_channel: tx,
@@ -227,11 +225,7 @@ impl MessageBusHandle {
 }
 
 impl MessageBus {
-    async fn start(
-        mut self,
-        input_channel: Receiver<BytesMut>,
-        output_channel: Sender<BytesMut>,
-    ) {
+    async fn start(mut self, input_channel: Receiver<BytesMut>, output_channel: Sender<BytesMut>) {
         let (work_queue, stealer) = async_channel::bounded(200_000);
         let (lane_sender, receive_from_lane) = channel(200_000);
 
@@ -274,7 +268,12 @@ impl MessageBus {
                             let stealer_clone = stealer.clone();
                             let sender = lane_sender.clone();
                             let address = connection.address.clone();
-                            let handle = ConnectionLaneHandle::new(connection.address.port(), stealer_clone, sender, connection.stream);
+                            let handle = ConnectionLaneHandle::new(
+                                connection.address.port(),
+                                stealer_clone,
+                                sender,
+                                connection.stream,
+                            );
                             map_insert(&self.connections, address, handle);
                         }
                     }
