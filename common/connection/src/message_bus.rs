@@ -110,8 +110,13 @@ pub struct ConnectionLaneHandle {
     port: u16,
 }
 
-impl ConnectionLane {
-    pub fn new(port: u16) -> (ConnectionLane, ConnectionLaneHandle) {
+impl ConnectionLaneHandle {
+    pub fn new(
+        port: u16,
+        input_channel: Async_Receiver<BytesMut>,
+        output_channel: Sender<BytesMut>,
+        stream: TcpStream,
+    ) -> ConnectionLaneHandle {
         let (tx, rx) = channel(100);
 
         let connection_lane = ConnectionLane {
@@ -119,14 +124,21 @@ impl ConnectionLane {
             lane_health: LaneHealth::HEALTHY,
             port,
         };
-        let connection_lane_handle = ConnectionLaneHandle {
+
+        let connection_lane_task = tokio::spawn(async move {
+            connection_lane.start(input_channel, output_channel, stream).await
+        });
+
+
+        ConnectionLaneHandle {
             command_channel: tx,
             port,
-        };
-        (connection_lane, connection_lane_handle)
+        }
     }
+}
 
-    pub async fn start(
+impl ConnectionLane {
+    async fn start(
         mut self,
         input_channel: Async_Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
@@ -189,29 +201,38 @@ pub struct MessageBusHandle {
     pub send_to_bus: Sender<BytesMut>,
 }
 
-impl MessageBus {
-    pub fn new(send_to_bus: Sender<BytesMut>) -> (MessageBus, MessageBusHandle) {
+impl MessageBusHandle {
+    pub fn new(
+        output_channel: Sender<BytesMut>,
+    ) -> MessageBusHandle {
         let connections = DashMap::new();
         let (tx, rx) = channel::<MessageBusCommand>(100);
-        let bus = MessageBus {
+        let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
+
+        let message_bus = MessageBus {
             command_channel: rx,
             connections,
             message_bus_health: MessageBusHealth::HEALTHY,
         };
-        let handle = MessageBusHandle {
+
+        let message_bus_task = tokio::spawn(async move {
+            message_bus.start(input_channel, output_channel).await
+        });
+
+        MessageBusHandle {
             command_channel: tx,
             send_to_bus,
-        };
-        (bus, handle)
+        }
     }
+}
 
-    pub async fn start(
+impl MessageBus {
+    async fn start(
         mut self,
         input_channel: Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
-        work_queue: Async_Sender<BytesMut>,
-        stealer: Async_Receiver<BytesMut>,
     ) {
+        let (work_queue, stealer) = async_channel::bounded(200_000);
         let (lane_sender, receive_from_lane) = channel(200_000);
 
         let (input_command, rx) = channel(100);
@@ -251,12 +272,10 @@ impl MessageBus {
                         }
                         MessageBusCommand::AddConnection(connection) => {
                             let stealer_clone = stealer.clone();
-                            let (lane, handle) = ConnectionLane::new(connection.address.port());
-                            map_insert(&self.connections, connection.address, handle);
                             let sender = lane_sender.clone();
-                            tokio::spawn(async move {
-                                lane.start(stealer_clone, sender, connection.stream).await
-                            });
+                            let address = connection.address.clone();
+                            let handle = ConnectionLaneHandle::new(connection.address.port(), stealer_clone, sender, connection.stream);
+                            map_insert(&self.connections, address, handle);
                         }
                     }
                 }

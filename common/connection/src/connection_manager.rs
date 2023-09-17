@@ -56,15 +56,11 @@ impl ConnectionManager {
                     Ok((stream, address)) => {
                         println!("New connection request from {}", &address);
                         if !arc_map_contains_key(node_map.clone(), &address.ip()) {
-                            let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
-
-                            let (message_bus, handle) = MessageBus::new(send_to_bus);
+                            let out = output_clone.clone();
+                            let handle = MessageBusHandle::new(out);
 
                             arc_map_insert(node_map.clone(), address.ip(), handle);
-                            let out = output_clone.clone();
-                            tokio::spawn(async move {
-                                start_new_bus(message_bus, input_channel, out.clone()).await;
-                            });
+
                             self.notifier
                                 .send(ConnectionNotification { address })
                                 .await
@@ -106,15 +102,10 @@ impl ConnectionManager {
                                 .await
                                 .expect("Unable to connect!");
                             if !arc_map_contains_key(self.node_map.clone(), &connect.address.ip()) {
-                                let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
-
-                                let (message_bus, handle) = MessageBus::new(send_to_bus);
+                                let out = out_put_clone.clone();
+                                let handle = MessageBusHandle::new(out);
 
                                 arc_map_insert(self.node_map.clone(), self.address.ip(), handle);
-                                let out = out_put_clone.clone();
-                                tokio::spawn(async move {
-                                    start_new_bus(message_bus, input_channel, out.clone()).await;
-                                });
                             }
 
                             match retrieve_command_channel(
@@ -141,16 +132,4 @@ impl ConnectionManager {
             }
         }
     }
-}
-
-async fn start_new_bus(
-    message_bus: MessageBus,
-    input_channel: Receiver<BytesMut>,
-    output_channel: Sender<BytesMut>,
-) {
-    let (work_queue, stealer) = async_channel::bounded(200_000);
-
-    message_bus
-        .start(input_channel, output_channel, work_queue, stealer)
-        .await;
 }
