@@ -3,7 +3,7 @@ pub mod core;
 mod settings;
 
 use bytes::BytesMut;
-use connection::connection_manager::ConnectionManager;
+use connection::connection_manager::{ConnectionManager, ConnectionManagerHandle};
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -34,19 +34,15 @@ async fn main() -> Result<()> {
 
     let node_map = Arc::new(DashMap::new());
 
-    // TODO ConnectionManager needs to be able to listen on multiple ports
-    let (node_manager, node_manager_handle) =
-        ConnectionManager::new(node_listener_address, node_map.clone());
-
-    let (to_router, for_router) = channel::<RouterRequestWrapper>(200_000);
-    let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(1000);
-
     // give `to_router_from_node` to the NodeManager to clone and send to each MessageBus
     let (to_router_from_node, from_node_to_router) = channel::<BytesMut>(200_000);
 
-    tokio::spawn(async move {
-        node_manager.start(to_router_from_node).await;
-    });
+    // TODO ConnectionManager needs to be able to listen on multiple ports
+    let node_manager_handle =
+        ConnectionManagerHandle::new(node_listener_address, node_map.clone(), to_router_from_node);
+
+    let (to_router, for_router) = channel::<RouterRequestWrapper>(200_000);
+    let (command_queue_sender, command_queue_receiver) = channel::<RouterCommand>(1000);
 
     let router_handle = RouterHandle::new(
         command_queue_sender.clone(),

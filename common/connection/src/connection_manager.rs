@@ -24,28 +24,33 @@ pub struct ConnectionManagerHandle {
     pub notification_receiver: Receiver<ConnectionNotification>,
 }
 
-impl ConnectionManager {
+impl ConnectionManagerHandle {
     pub fn new(
         address: SocketAddr,
         node_map: Arc<DashMap<IpAddr, MessageBusHandle>>,
-    ) -> (ConnectionManager, ConnectionManagerHandle) {
+        output_channel: Sender<BytesMut>,
+    ) -> ConnectionManagerHandle {
         let (command_sender, command_receiver) = channel(100);
         let (notifier, notification_receiver) = channel(100);
 
-        let node_listener = ConnectionManager {
+        let connection_manager = ConnectionManager {
             command_channel: command_receiver,
             address,
             node_map,
             notifier,
         };
 
-        let node_listener_handle = ConnectionManagerHandle {
+        let connection_manager_task =
+            tokio::spawn(async move { connection_manager.start(output_channel).await });
+
+        ConnectionManagerHandle {
             command_channel: command_sender,
             notification_receiver,
-        };
-        (node_listener, node_listener_handle)
+        }
     }
+}
 
+impl ConnectionManager {
     pub async fn start(mut self, output_channel: Sender<BytesMut>) {
         let data_listener = TcpListener::bind(self.address).await.unwrap();
         let node_map = self.node_map.clone();
