@@ -260,10 +260,11 @@ impl Connection {
                                 .send(Command::Shutdown())
                                 .await
                                 .expect("Unable to send!");
+                            // TODO commented out because this is preventing connection closure. Need to close out write_handle as well
                             // Wait until both have closed before closing the Connection object
-                            while !read_handle.is_finished() || !write_handle.is_finished() {
-                                sleep(Duration::from_millis(1))
-                            }
+                            // while !read_handle.is_finished() || !write_handle.is_finished() {
+                            //     sleep(Duration::from_millis(1))
+                            // }
                             break;
                         }
                     }
