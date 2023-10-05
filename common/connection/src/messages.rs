@@ -1,3 +1,4 @@
+use crate::message_bus::{ConnectionLaneHandle, MessageBusHandle};
 use rkyv::{with::CopyOptimize, Archive, Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use tokio::net::TcpStream;
@@ -114,9 +115,10 @@ impl RequestOrigin for ArchivedRequest {
     }
 }
 
-pub enum NodeManagerCommand {
+pub enum ConnectionManagerCommand {
     Shutdown(),
-    Connect(Connect),
+    Connect(MessageBusAddress),
+    RemoveConnection(MessageBusAddress),
 }
 
 pub enum Command {
@@ -125,14 +127,16 @@ pub enum Command {
 
 pub enum MessageBusCommand {
     Shutdown(),
-    AddConnection(AddConnection),
+    AddConnection(MessageBusConnection),
+    RemoveConnection(SocketAddr),
+    AddHandle(SocketAddr, ConnectionLaneHandle),
 }
 
-pub struct Connect {
+pub struct MessageBusAddress {
     pub address: SocketAddr,
 }
 
-pub struct AddConnection {
+pub struct MessageBusConnection {
     pub address: SocketAddr,
     pub stream: TcpStream,
 }

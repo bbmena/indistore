@@ -5,7 +5,7 @@ use crate::core::data_store::DataStore;
 use crate::settings::Settings;
 use bytes::BytesMut;
 use connection::connection_manager::{ConnectionManager, ConnectionManagerHandle};
-use connection::messages::{Connect, NodeManagerCommand};
+use connection::messages::{ConnectionManagerCommand, MessageBusAddress};
 use dashmap::DashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ async fn startup(handle: &ConnectionManagerHandle) {
     let node_listener_address = SocketAddr::new(settings.listener_address, 1338);
     handle
         .command_channel
-        .send(NodeManagerCommand::Connect(Connect {
+        .send(ConnectionManagerCommand::Connect(MessageBusAddress {
             address: node_listener_address,
         }))
         .await

@@ -11,6 +11,14 @@ where
 }
 
 // Access to DashMap must be done from a synchronous function
+pub fn map_remove<K, V>(map: &DashMap<K, V>, key: &K) -> Option<(K, V)>
+where
+    K: Eq + PartialEq + Hash,
+{
+    map.remove(key)
+}
+
+// Access to DashMap must be done from a synchronous function
 pub fn arc_map_insert<K, V>(map: Arc<DashMap<K, V>>, key: K, val: V)
 where
     K: Eq + PartialEq + Hash,

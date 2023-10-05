@@ -2,15 +2,19 @@ use bytes::BytesMut;
 use dashmap::DashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::thread::sleep;
+use std::time::Duration;
 use tachyonix::{channel, Receiver, Sender};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf};
 use tokio::net::TcpStream;
 
 use async_channel::Receiver as Async_Receiver;
 use async_channel::Sender as Async_Sender;
-use util::map_access_wrapper::map_insert;
+use tokio::sync::Notify;
+use tokio::task::JoinHandle;
+use util::map_access_wrapper::{map_insert, map_remove};
 
-use crate::messages::{Command, MessageBusCommand};
+use crate::messages::{Command, ConnectionManagerCommand, MessageBusAddress, MessageBusCommand};
 
 /**
    UNINITIATED - Not yet connected
@@ -41,7 +45,7 @@ pub struct ReadConnection {
 }
 
 impl ReadConnection {
-    pub async fn read(mut self, output_channel: Sender<BytesMut>) {
+    pub async fn read(mut self, output_channel: Sender<BytesMut>, kill_switch: Arc<Notify>) {
         tokio::spawn(async move {
             loop {
                 match self.data_read_stream.read_u32().await {
@@ -56,10 +60,22 @@ impl ReadConnection {
                             Err(_) => break,
                         }
                     }
-                    Err(_) => break,
+                    Err(_) => {
+                        println!("Client disconnected");
+                        kill_switch.notify_one();
+                        break;
+                    }
                 }
             }
         });
+        loop {
+            match self.command_channel.recv().await {
+                Ok(command) => match command {
+                    Command::Shutdown() => break,
+                },
+                Err(_) => break,
+            }
+        }
     }
 }
 
@@ -69,10 +85,13 @@ pub struct WriteConnection {
 }
 
 impl WriteConnection {
-    pub async fn write(mut self, input_channel: Async_Receiver<BytesMut>) {
+    pub async fn write(
+        mut self,
+        input_channel: Async_Receiver<BytesMut>,
+        kill_switch: Arc<Notify>,
+    ) {
         tokio::spawn(async move {
-            loop {
-                let mut buffer = input_channel.recv().await.expect("unable to receive!");
+            while let Ok(mut buffer) = input_channel.recv().await {
                 self.data_write_stream
                     .write_u32(buffer.len() as u32)
                     .await
@@ -83,7 +102,11 @@ impl WriteConnection {
                     .await
                     .expect("Unable to write buffer!");
                 match self.data_write_stream.flush().await {
-                    Err(_) => break,
+                    Err(_) => {
+                        println!("Client disconnected");
+                        kill_switch.notify_one();
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -91,7 +114,7 @@ impl WriteConnection {
         loop {
             match self.command_channel.recv().await {
                 Ok(command) => match command {
-                    Command::Shutdown() => {}
+                    Command::Shutdown() => break,
                 },
                 Err(_) => break,
             }
@@ -100,7 +123,6 @@ impl WriteConnection {
 }
 
 pub struct ConnectionLane {
-    command_channel: Receiver<Command>,
     lane_health: LaneHealth,
     port: u16,
 }
@@ -112,28 +134,35 @@ pub struct ConnectionLaneHandle {
 
 impl ConnectionLaneHandle {
     pub fn new(
-        port: u16,
+        address: SocketAddr,
         input_channel: Async_Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
         stream: TcpStream,
+        kill_switch: Sender<MessageBusCommand>,
     ) -> ConnectionLaneHandle {
         let (tx, rx) = channel(100);
 
         let connection_lane = ConnectionLane {
-            command_channel: rx,
             lane_health: LaneHealth::HEALTHY,
-            port,
+            port: address.port(),
         };
 
-        let connection_lane_task = tokio::spawn(async move {
+        tokio::spawn(async move {
             connection_lane
-                .start(input_channel, output_channel, stream)
+                .start(
+                    address,
+                    input_channel,
+                    output_channel,
+                    stream,
+                    rx,
+                    kill_switch,
+                )
                 .await
         });
 
         ConnectionLaneHandle {
             command_channel: tx,
-            port,
+            port: address.port(),
         }
     }
 }
@@ -141,12 +170,14 @@ impl ConnectionLaneHandle {
 impl ConnectionLane {
     async fn start(
         mut self,
+        self_address: SocketAddr,
         input_channel: Async_Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
         stream: TcpStream,
+        mut command_channel: Receiver<Command>,
+        kill_switch: Sender<MessageBusCommand>,
     ) {
-        let local_address = stream.local_addr().expect("oh noes").clone();
-        println!("Starting new lane at {}", &local_address);
+        println!("Starting new lane at {}", &self_address);
         let (read, write) = tokio::io::split(stream);
 
         let (read_half_channel, read_command_channel) = channel::<Command>(100);
@@ -161,18 +192,21 @@ impl ConnectionLane {
             data_read_stream: BufReader::new(read),
             command_channel: read_command_channel,
         };
+        let reader_kill_switch = Arc::new(Notify::new());
+        let writer_kill_switch = reader_kill_switch.clone();
+        let kill_switch_receiver = reader_kill_switch.clone();
 
-        tokio::spawn(async move {
-            write.write(input_channel).await;
+        let writer = tokio::spawn(async move {
+            write.write(input_channel, writer_kill_switch).await;
         });
 
-        tokio::spawn(async move {
-            read.read(output_channel).await;
+        let reader = tokio::spawn(async move {
+            read.read(output_channel, reader_kill_switch).await;
         });
 
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => match command {
+        let command_channel_task = tokio::spawn(async move {
+            while let Ok(command) = command_channel.recv().await {
+                match command {
                     Command::Shutdown() => {
                         read_half_channel.send(Command::Shutdown()).await.expect("");
                         write_half_channel
@@ -181,8 +215,71 @@ impl ConnectionLane {
                             .expect("Unable to send!");
                         break;
                     }
-                },
-                Err(_) => break,
+                }
+            }
+        });
+
+        // If kill switch is notified that means there was a disconnect from the client. No need to wait for tasks to end. Abort.
+        kill_switch_receiver.notified().await;
+        command_channel_task.abort();
+        writer.abort();
+        reader.abort();
+        // Notify parent of shutdown
+        kill_switch
+            .send(MessageBusCommand::RemoveConnection(self_address))
+            .await
+            .expect("Unable to send shutdown!")
+    }
+}
+
+pub struct MessageBusConnectionManager {
+    command_channel: Receiver<MessageBusCommand>,
+    connections: DashMap<SocketAddr, ConnectionLaneHandle>,
+}
+
+pub struct MessageBusConnectionManagerHandle {
+    command_channel: Sender<MessageBusCommand>,
+}
+
+impl MessageBusConnectionManagerHandle {
+    fn new(kill_switch: Arc<Notify>) -> MessageBusConnectionManagerHandle {
+        let connections = DashMap::new();
+        let (tx, rx) = channel::<MessageBusCommand>(100);
+
+        let connection_manager = MessageBusConnectionManager {
+            command_channel: rx,
+            connections,
+        };
+
+        tokio::spawn(async move {
+            connection_manager.start(kill_switch).await;
+        });
+
+        MessageBusConnectionManagerHandle {
+            command_channel: tx,
+        }
+    }
+}
+
+impl MessageBusConnectionManager {
+    async fn start(mut self, kill_switch: Arc<Notify>) {
+        while let Ok(command) = self.command_channel.recv().await {
+            // TODO will eventually want a query command as well
+            match command {
+                MessageBusCommand::Shutdown() => break,
+                MessageBusCommand::AddHandle(address, handle) => {
+                    map_insert(&self.connections, address, handle);
+                }
+                MessageBusCommand::RemoveConnection(connection) => {
+                    map_remove(&self.connections, &connection);
+
+                    // If all connections to a client have been closed, the client must have disconnected so we can close the bus
+                    if self.connections.is_empty() {
+                        kill_switch.notify_one();
+                        break;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -193,39 +290,52 @@ impl ConnectionLane {
 **/
 pub struct MessageBus {
     command_channel: Receiver<MessageBusCommand>,
-    connections: DashMap<SocketAddr, ConnectionLaneHandle>,
     message_bus_health: MessageBusHealth,
+    address: SocketAddr,
 }
 
 pub struct MessageBusHandle {
     pub command_channel: Sender<MessageBusCommand>,
     pub send_to_bus: Sender<BytesMut>,
+    pub message_bus_task: JoinHandle<()>,
 }
 
 impl MessageBusHandle {
-    pub fn new(output_channel: Sender<BytesMut>) -> MessageBusHandle {
-        let connections = DashMap::new();
+    pub fn new(
+        output_channel: Sender<BytesMut>,
+        address: SocketAddr,
+        connection_manager_sender: Sender<ConnectionManagerCommand>,
+    ) -> MessageBusHandle {
         let (tx, rx) = channel::<MessageBusCommand>(100);
         let (send_to_bus, input_channel) = channel::<BytesMut>(200_000);
 
         let message_bus = MessageBus {
             command_channel: rx,
-            connections,
             message_bus_health: MessageBusHealth::HEALTHY,
+            address,
         };
 
-        let message_bus_task =
-            tokio::spawn(async move { message_bus.start(input_channel, output_channel).await });
+        let message_bus_task = tokio::spawn(async move {
+            message_bus
+                .start(input_channel, output_channel, connection_manager_sender)
+                .await
+        });
 
         MessageBusHandle {
             command_channel: tx,
             send_to_bus,
+            message_bus_task,
         }
     }
 }
 
 impl MessageBus {
-    async fn start(mut self, input_channel: Receiver<BytesMut>, output_channel: Sender<BytesMut>) {
+    async fn start(
+        mut self,
+        input_channel: Receiver<BytesMut>,
+        output_channel: Sender<BytesMut>,
+        connection_manager_sender: Sender<ConnectionManagerCommand>,
+    ) {
         let (work_queue, stealer) = async_channel::bounded(200_000);
         let (lane_sender, receive_from_lane) = channel(200_000);
 
@@ -249,12 +359,16 @@ impl MessageBus {
             output.start(receive_from_lane).await;
         });
 
+        let message_bus_connection_manager_notify = Arc::new(Notify::new());
+        let kill_switch = message_bus_connection_manager_notify.clone();
+
+        let connection_manager = MessageBusConnectionManagerHandle::new(kill_switch.clone());
+
         loop {
-            match self.command_channel.recv().await {
-                Ok(command) => {
+            tokio::select! {
+                Ok(command) = self.command_channel.recv() => {
                     match command {
                         MessageBusCommand::Shutdown() => {
-                            // TODO these commands will currently be ignored. Need to be handled by receivers
                             input_command
                                 .send(Command::Shutdown())
                                 .await
@@ -263,24 +377,40 @@ impl MessageBus {
                                 .send(Command::Shutdown())
                                 .await
                                 .expect("Unable to send!");
+                            break;
                         }
                         MessageBusCommand::AddConnection(connection) => {
                             let stealer_clone = stealer.clone();
                             let sender = lane_sender.clone();
                             let address = connection.address.clone();
                             let handle = ConnectionLaneHandle::new(
-                                connection.address.port(),
+                                address.clone(),
                                 stealer_clone,
                                 sender,
                                 connection.stream,
+                                connection_manager.command_channel.clone()
                             );
-                            map_insert(&self.connections, address, handle);
+
+                            connection_manager.command_channel.send(MessageBusCommand::AddHandle(address, handle)).await.expect("Unable to send!")
                         }
+                        _ => {}
                     }
+                },
+                _ = message_bus_connection_manager_notify.notified() => {
+                    break
                 }
-                Err(_) => {}
             }
         }
+
+        connection_manager_sender
+            .send(ConnectionManagerCommand::RemoveConnection(
+                MessageBusAddress {
+                    address: self.address,
+                },
+            ))
+            .await
+            .expect("Unable to send!");
+        println!("Closing Message Bus")
     }
 
     pub fn health(&self) -> MessageBusHealth {
