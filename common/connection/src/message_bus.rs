@@ -13,6 +13,7 @@ use async_channel::Sender as Async_Sender;
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 use util::map_access_wrapper::{map_insert, map_remove};
+use util::map_manager::{MapManagerCommand, MapManagerHandle};
 
 use crate::messages::{Command, ConnectionManagerCommand, MessageBusAddress, MessageBusCommand};
 
@@ -138,7 +139,7 @@ impl ConnectionLaneHandle {
         input_channel: Async_Receiver<BytesMut>,
         output_channel: Sender<BytesMut>,
         stream: TcpStream,
-        kill_switch: Sender<MessageBusCommand>,
+        kill_switch: Sender<MapManagerCommand<SocketAddr, ConnectionLaneHandle>>,
     ) -> ConnectionLaneHandle {
         let (tx, rx) = channel(100);
 
@@ -175,7 +176,7 @@ impl ConnectionLane {
         output_channel: Sender<BytesMut>,
         stream: TcpStream,
         mut command_channel: Receiver<Command>,
-        kill_switch: Sender<MessageBusCommand>,
+        kill_switch: Sender<MapManagerCommand<SocketAddr, ConnectionLaneHandle>>,
     ) {
         println!("Starting new lane at {}", &self_address);
         let (read, write) = tokio::io::split(stream);
@@ -226,62 +227,9 @@ impl ConnectionLane {
         reader.abort();
         // Notify parent of shutdown
         kill_switch
-            .send(MessageBusCommand::RemoveConnection(self_address))
+            .send(MapManagerCommand::RemoveValue(self_address))
             .await
             .expect("Unable to send shutdown!")
-    }
-}
-
-pub struct MessageBusConnectionManager {
-    command_channel: Receiver<MessageBusCommand>,
-    connections: DashMap<SocketAddr, ConnectionLaneHandle>,
-}
-
-pub struct MessageBusConnectionManagerHandle {
-    command_channel: Sender<MessageBusCommand>,
-}
-
-impl MessageBusConnectionManagerHandle {
-    fn new(kill_switch: Arc<Notify>) -> MessageBusConnectionManagerHandle {
-        let connections = DashMap::new();
-        let (tx, rx) = channel::<MessageBusCommand>(100);
-
-        let connection_manager = MessageBusConnectionManager {
-            command_channel: rx,
-            connections,
-        };
-
-        tokio::spawn(async move {
-            connection_manager.start(kill_switch).await;
-        });
-
-        MessageBusConnectionManagerHandle {
-            command_channel: tx,
-        }
-    }
-}
-
-impl MessageBusConnectionManager {
-    async fn start(mut self, kill_switch: Arc<Notify>) {
-        while let Ok(command) = self.command_channel.recv().await {
-            // TODO will eventually want a query command as well
-            match command {
-                MessageBusCommand::Shutdown() => break,
-                MessageBusCommand::AddHandle(address, handle) => {
-                    map_insert(&self.connections, address, handle);
-                }
-                MessageBusCommand::RemoveConnection(connection) => {
-                    map_remove(&self.connections, &connection);
-
-                    // If all connections to a client have been closed, the client must have disconnected so we can close the bus
-                    if self.connections.is_empty() {
-                        kill_switch.notify_one();
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
     }
 }
 
@@ -362,7 +310,7 @@ impl MessageBus {
         let message_bus_connection_manager_notify = Arc::new(Notify::new());
         let kill_switch = message_bus_connection_manager_notify.clone();
 
-        let connection_manager = MessageBusConnectionManagerHandle::new(kill_switch.clone());
+        let connection_manager = MapManagerHandle::new(kill_switch.clone());
 
         loop {
             tokio::select! {
@@ -391,7 +339,7 @@ impl MessageBus {
                                 connection_manager.command_channel.clone()
                             );
 
-                            connection_manager.command_channel.send(MessageBusCommand::AddHandle(address, handle)).await.expect("Unable to send!")
+                            connection_manager.command_channel.send(MapManagerCommand::AddValue(address, handle)).await.expect("Unable to send!");
                         }
                         _ => {}
                     }
