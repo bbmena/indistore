@@ -90,26 +90,22 @@ impl Server {
         let data_listener = TcpListener::bind(self.address).await.unwrap();
         let connections_ref = self.connections.clone();
         let listener = tokio::spawn(async move {
-            loop {
+            while let Ok((stream, _)) = data_listener.accept().await {
                 let send_to_router = self.router_channel.clone();
                 let router_command_clone = router_command_channel.clone();
-                match data_listener.accept().await {
-                    Ok((stream, _)) => {
-                        let server_command_channel = self_command_channel.clone();
-                        let connection_handle = ConnectionHandle::new(
-                            stream,
-                            send_to_router,
-                            router_command_clone,
-                            server_command_channel,
-                        );
-                        arc_map_insert(
-                            connections_ref.clone(),
-                            connection_handle.channel_id,
-                            connection_handle,
-                        );
-                    }
-                    Err(_) => break,
-                }
+                let server_command_channel = self_command_channel.clone();
+
+                let connection_handle = ConnectionHandle::new(
+                    stream,
+                    send_to_router,
+                    router_command_clone,
+                    server_command_channel,
+                );
+                arc_map_insert(
+                    connections_ref.clone(),
+                    connection_handle.channel_id,
+                    connection_handle,
+                );
             }
         });
 
@@ -244,34 +240,30 @@ impl Connection {
                 .await;
         });
 
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => {
-                    match command {
-                        Command::Shutdown() => {
-                            // ReadConnection may be the one sending the Shutdown command, so check that it is open before trying to send
-                            if !read_half_queue.is_closed() {
-                                read_half_queue
-                                    .send(Command::Shutdown())
-                                    .await
-                                    .expect("Unable to send!");
-                            }
-                            write_half_queue
-                                .send(Command::Shutdown())
-                                .await
-                                .expect("Unable to send!");
-                            // TODO commented out because this is preventing connection closure. Need to close out write_handle as well
-                            // Wait until both have closed before closing the Connection object
-                            // while !read_handle.is_finished() || !write_handle.is_finished() {
-                            //     sleep(Duration::from_millis(1))
-                            // }
-                            break;
-                        }
+        while let Ok(command) = self.command_channel.recv().await {
+            match command {
+                Command::Shutdown() => {
+                    // ReadConnection may be the one sending the Shutdown command, so check that it is open before trying to send
+                    if !read_half_queue.is_closed() {
+                        read_half_queue
+                            .send(Command::Shutdown())
+                            .await
+                            .expect("Unable to send!");
                     }
+                    write_half_queue
+                        .send(Command::Shutdown())
+                        .await
+                        .expect("Unable to send!");
+                    // TODO commented out because this is preventing connection closure. Need to close out write_handle as well
+                    // Wait until both have closed before closing the Connection object
+                    // while !read_handle.is_finished() || !write_handle.is_finished() {
+                    //     sleep(Duration::from_millis(1))
+                    // }
+                    break;
                 }
-                Err(_) => break,
             }
         }
+
         router_command_channel
             .send(RouterCommand::Unsubscribe(ChannelUnsubscribe {
                 channel_id: self.channel_id,
@@ -300,41 +292,35 @@ impl ReadConnection {
         server_command_channel: Sender<Command>,
     ) {
         let read_task = tokio::spawn(async move {
-            loop {
-                match data_read_stream.read_u32().await {
-                    Ok(message_size) => {
-                        let mut buff = BytesMut::with_capacity(message_size as usize);
-                        // TODO: will likely need a different read function here to ensure we get the whole buffer. Or repeat the read until we fill the buffer
-                        match data_read_stream.read_buf(&mut buff).await {
-                            Ok(_) => {
-                                router_channel
-                                    .send(RouterRequestWrapper {
-                                        channel_id,
-                                        body: buff,
-                                    })
-                                    .await
-                                    .expect("Unable to send!");
-                            }
-                            Err(_) => break,
-                        }
+            while let Ok(message_size) = data_read_stream.read_u32().await {
+                let mut buff = BytesMut::with_capacity(message_size as usize);
+                // TODO: will likely need a different read function here to ensure we get the whole buffer. Or repeat the read until we fill the buffer
+                match data_read_stream.read_buf(&mut buff).await {
+                    Ok(_) => {
+                        router_channel
+                            .send(RouterRequestWrapper {
+                                channel_id,
+                                body: buff,
+                            })
+                            .await
+                            .expect("Unable to send!");
                     }
                     Err(_) => break,
                 }
             }
+
             server_command_channel
                 .send(Command::Shutdown())
                 .await
                 .expect("Cannot send!");
         });
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => match command {
-                    Command::Shutdown() => {
-                        read_task.abort();
-                        break;
-                    }
-                },
-                Err(_) => break,
+
+        while let Ok(command) = self.command_channel.recv().await {
+            match command {
+                Command::Shutdown() => {
+                    read_task.abort();
+                    break;
+                }
             }
         }
     }
@@ -352,38 +338,29 @@ impl WriteConnection {
         mut router_channel: Receiver<BytesMut>,
     ) {
         let write_task = tokio::spawn(async move {
-            loop {
-                match router_channel.recv().await {
-                    Ok(mut buffer) => {
-                        data_write_stream
-                            .write_u32(buffer.len() as u32)
-                            .await
-                            .expect("Unable to write!");
-                        data_write_stream
-                            .write_buf(&mut buffer)
-                            .await
-                            .expect("Unable to write buffer!");
-                        match data_write_stream.flush().await {
-                            Ok(_) => {}
-                            Err(_) => break,
-                        }
-                    }
+            while let Ok(mut buffer) = router_channel.recv().await {
+                data_write_stream
+                    .write_u32(buffer.len() as u32)
+                    .await
+                    .expect("Unable to write!");
+                data_write_stream
+                    .write_buf(&mut buffer)
+                    .await
+                    .expect("Unable to write buffer!");
+                match data_write_stream.flush().await {
+                    Ok(_) => {}
                     Err(_) => break,
                 }
             }
         });
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => {
-                    match command {
-                        Command::Shutdown() => {
-                            // TODO: This may cause loss of messages currently in flight
-                            write_task.abort();
-                            break;
-                        }
-                    }
+
+        while let Ok(command) = self.command_channel.recv().await {
+            match command {
+                Command::Shutdown() => {
+                    // TODO: This may cause loss of messages currently in flight
+                    write_task.abort();
+                    break;
                 }
-                Err(_) => break,
             }
         }
     }

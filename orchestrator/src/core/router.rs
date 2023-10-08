@@ -116,26 +116,21 @@ impl Router {
             }
         });
 
-        loop {
-            match self.command_channel.recv().await {
-                Ok(command) => match command {
-                    RouterCommand::Shutdown() => {
-                        self.shutdown(request_processor_handle, response_processor_handle)
-                            .await;
-                        break;
-                    }
-                    RouterCommand::Subscribe(sub) => {
-                        let sub_ack = self.add_subscriber(sub.channel_id, sub.response_channel);
-                        let _ = sub.subscribe_acknowledge.send(sub_ack);
-                    }
-                    RouterCommand::AddNode(address) => {
-                        self.hash_ring.lock().await.add_node(address)
-                    }
-                    RouterCommand::Unsubscribe(unsub) => {
-                        self.remove_subscriber(unsub);
-                    }
-                },
-                Err(_) => break,
+        while let Ok(command) = self.command_channel.recv().await {
+            match command {
+                RouterCommand::Shutdown() => {
+                    self.shutdown(request_processor_handle, response_processor_handle)
+                        .await;
+                    break;
+                }
+                RouterCommand::Subscribe(sub) => {
+                    let sub_ack = self.add_subscriber(sub.channel_id, sub.response_channel);
+                    let _ = sub.subscribe_acknowledge.send(sub_ack);
+                }
+                RouterCommand::AddNode(address) => self.hash_ring.lock().await.add_node(address),
+                RouterCommand::Unsubscribe(unsub) => {
+                    self.remove_subscriber(unsub);
+                }
             }
         }
     }
@@ -182,8 +177,7 @@ pub struct RequestQueueProcessor {
 
 impl RequestQueueProcessor {
     async fn process(&mut self) {
-        loop {
-            let message = self.request_channel.recv().await.expect("Unable to read!");
+        while let Ok(message) = self.request_channel.recv().await {
             let buff = message.body;
             let message_archive: &Archived<Request> =
                 rkyv::check_archived_root::<Request>(&buff[..]).unwrap();
@@ -239,8 +233,7 @@ pub struct ResponseQueueProcessor {
 
 impl ResponseQueueProcessor {
     async fn process(&mut self) {
-        loop {
-            let buff = self.response_channel.recv().await.expect("Unable to read!");
+        while let Ok(buff) = self.response_channel.recv().await {
             let message_archive: &Archived<Response> =
                 rkyv::check_archived_root::<Response>(&buff[..]).unwrap(); // TODO this starts to run into errors when a high number of channels are open from one client
             let routing_info: Option<(&ArchivedString, &Uuid)> = match message_archive {
