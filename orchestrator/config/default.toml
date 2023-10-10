@@ -1,4 +1,5 @@
 listener_address = "127.0.0.1"
+#listener_address = "0.0.0.0"
 
 [server]
 listener_port = 1337

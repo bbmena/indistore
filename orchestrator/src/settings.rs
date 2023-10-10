@@ -35,9 +35,13 @@ impl Settings {
         let run_mode = env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
         let settings = Config::builder()
             // default config
-            .add_source(File::with_name("orchestrator/config/default"))
+            // .add_source(File::with_name("orchestrator/config/default"))
+            .add_source(File::with_name("config/orchestrator/default"))
+            // .add_source(
+            //     File::with_name(&format!("orchestrator/config/{}", run_mode)).required(false),
+            // )
             .add_source(
-                File::with_name(&format!("orchestrator/config/{}", run_mode)).required(false),
+                File::with_name(&format!("config/orchestrator/{}", run_mode)).required(false),
             )
             .build()?;
         settings.try_deserialize()

@@ -21,8 +21,10 @@ impl Settings {
         let run_mode = env::var("RUN_MODE").unwrap_or_else(|_| "development".into());
         let settings = Config::builder()
             // default config
-            .add_source(File::with_name("node/config/default"))
-            .add_source(File::with_name(&format!("node/config/{}", run_mode)).required(false))
+            // .add_source(File::with_name("node/config/default"))
+            .add_source(File::with_name("config/node/default"))
+            // .add_source(File::with_name(&format!("node/config/{}", run_mode)).required(false))
+            .add_source(File::with_name(&format!("config/node/{}", run_mode)).required(false))
             .build()?;
         settings.try_deserialize()
     }
